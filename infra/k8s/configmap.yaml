@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: schoolify-config
+  namespace: schoolify-prod
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  KAFKA_BOOTSTRAP_SERVERS: "kafka-broker-0.kafka-headless:9092,kafka-broker-1.kafka-headless:9092,kafka-broker-2.kafka-headless:9092"
+
+  # Service discovery (internal cluster DNS)
+  AUTH_SERVICE_URL: "http://auth-service:8001"
+  TENANT_SERVICE_URL: "http://tenant-service:8002"
+  USER_SERVICE_URL: "http://user-service:8003"
+  STUDENT_SERVICE_URL: "http://student-service:8004"
+  ATTENDANCE_SERVICE_URL: "http://attendance-service:8005"
+  FEE_SERVICE_URL: "http://fee-service:8006"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8007"
+  ASSIGNMENT_SERVICE_URL: "http://assignment-service:8008"
+  ANALYTICS_SERVICE_URL: "http://analytics-service:8009"
+  AI_COPILOT_SERVICE_URL: "http://ai-copilot-service:8010"
+
+  # App settings
+  ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+  REFRESH_TOKEN_EXPIRE_DAYS: "7"
+  RATE_LIMIT_PER_MINUTE: "60"
+  MAX_UPLOAD_SIZE_MB: "50"
+  FAISS_STORE_DIR: "/data/faiss_indexes"

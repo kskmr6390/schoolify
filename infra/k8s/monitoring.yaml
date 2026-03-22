@@ -1,0 +1,126 @@
+---
+# ServiceMonitor for Prometheus scraping (requires kube-prometheus-stack)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: schoolify-services
+  namespace: schoolify-prod
+  labels:
+    release: prometheus  # Must match Prometheus operator selector
+spec:
+  selector:
+    matchLabels:
+      monitored: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - schoolify-prod
+---
+# PrometheusRule for alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: schoolify-alerts
+  namespace: schoolify-prod
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: schoolify.availability
+      rules:
+        - alert: ServiceDown
+          expr: up{namespace="schoolify-prod"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Service {{ $labels.job }} is down"
+            description: "{{ $labels.instance }} has been down for more than 2 minutes."
+
+        - alert: HighErrorRate
+          expr: |
+            rate(http_requests_total{namespace="schoolify-prod",status=~"5.."}[5m])
+            / rate(http_requests_total{namespace="schoolify-prod"}[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate on {{ $labels.job }}"
+            description: "Error rate is {{ $value | humanizePercentage }} for {{ $labels.job }}"
+
+        - alert: HighLatency
+          expr: |
+            histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{namespace="schoolify-prod"}[5m])) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High P95 latency on {{ $labels.job }}"
+            description: "P95 latency is {{ $value }}s for {{ $labels.job }}"
+
+    - name: schoolify.resources
+      rules:
+        - alert: HighCPU
+          expr: |
+            rate(container_cpu_usage_seconds_total{namespace="schoolify-prod",container!=""}[5m])
+            / container_spec_cpu_quota{namespace="schoolify-prod",container!=""} * container_spec_cpu_period{namespace="schoolify-prod",container!=""} > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage in {{ $labels.pod }}"
+
+        - alert: HighMemory
+          expr: |
+            container_memory_working_set_bytes{namespace="schoolify-prod",container!=""}
+            / container_spec_memory_limit_bytes{namespace="schoolify-prod",container!=""} > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage in {{ $labels.pod }}"
+
+        - alert: KafkaConsumerLag
+          expr: kafka_consumer_group_lag > 1000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Kafka consumer lag is high"
+            description: "Consumer group {{ $labels.group }} lag is {{ $value }}"
+---
+# Grafana Dashboard ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: schoolify-grafana-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  schoolify-overview.json: |
+    {
+      "title": "Schoolify — Service Overview",
+      "uid": "schoolify-overview",
+      "panels": [
+        {
+          "title": "Request Rate",
+          "type": "graph",
+          "targets": [{"expr": "sum(rate(http_requests_total{namespace=\"schoolify-prod\"}[5m])) by (job)"}]
+        },
+        {
+          "title": "P95 Latency",
+          "type": "graph",
+          "targets": [{"expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace=\"schoolify-prod\"}[5m])) by (le, job))"}]
+        },
+        {
+          "title": "Error Rate",
+          "type": "singlestat",
+          "targets": [{"expr": "sum(rate(http_requests_total{namespace=\"schoolify-prod\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{namespace=\"schoolify-prod\"}[5m]))"}]
+        }
+      ]
+    }

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p docs services/shared services/auth-service services/tenant-service services/user-service services/student-service services/attendance-service services/fee-service services/assignment-service services/notification-service services/analytics-service services/ai-copilot-service services/api-gateway services/migrations/versions docker infra/k8s .github/workflows scripts mobile/components mobile/lib mobile/store mobile/screens)",
+      "Bash(mkdir -p \"frontend/web/src/app/\\(auth\\)/login\" \"frontend/web/src/app/\\(auth\\)/forgot-password\" \"frontend/web/src/app/\\(dashboard\\)/dashboard\" \"frontend/web/src/app/\\(dashboard\\)/students\" \"frontend/web/src/app/\\(dashboard\\)/attendance\" \"frontend/web/src/app/\\(dashboard\\)/fees\" \"frontend/web/src/app/\\(dashboard\\)/ai-copilot\" \"frontend/web/src/app/\\(dashboard\\)/settings\" frontend/web/src/components/dashboard frontend/web/src/components/layout frontend/web/src/components/ui frontend/web/src/hooks frontend/web/src/lib frontend/web/src/store frontend/web/src/types)",
+      "Bash(mkdir -p \"mobile/app/\\(auth\\)\" \"mobile/app/\\(tabs\\)\")",
+      "Bash(docker compose:*)",
+      "Bash(docker stop:*)",
+      "Bash(curl -s 'http://localhost:8000/api/v1/feed?page=1&per_page=10' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0YTg5ZmY2Mi1jZDE5LTQ2MTEtOGY0Yi05NGQ1N2NiZGFkYWEiLCJ0ZW5hbnRfaWQiOiI0YjdjOWY5Yy00MmUwLTRhMmUtYjk0ZC02YjM1NDI3YmVmY2MiLCJyb2xlIjoiYWRtaW4iLCJlbWFpbCI6ImFkbWluQGdyZWVud29vZC5lZHUiLCJleHAiOjE3NzQxMzQxODcsImlhdCI6MTc3NDEzMjM4NywianRpIjoiODYxZTdiZjgtYTc4Mi00MGQzLWFiNDctYzVkNjZjMGM4MjJkIn0.PHOqhjicCiKuJbILWv2Pq4d9ePqHL0dEtafDkCerr94' -H 'X-Tenant-Slug: greenwood-high')",
+      "Bash(docker cp:*)"
+    ]
+  }
+}

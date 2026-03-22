@@ -1,0 +1,64 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: 'development'
+
+scrape_configs:
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['api-gateway:8000']
+    metrics_path: /metrics
+
+  - job_name: 'auth-service'
+    static_configs:
+      - targets: ['auth-service:8001']
+    metrics_path: /metrics
+
+  - job_name: 'tenant-service'
+    static_configs:
+      - targets: ['tenant-service:8002']
+    metrics_path: /metrics
+
+  - job_name: 'student-service'
+    static_configs:
+      - targets: ['student-service:8004']
+    metrics_path: /metrics
+
+  - job_name: 'attendance-service'
+    static_configs:
+      - targets: ['attendance-service:8005']
+    metrics_path: /metrics
+
+  - job_name: 'fee-service'
+    static_configs:
+      - targets: ['fee-service:8006']
+    metrics_path: /metrics
+
+  - job_name: 'notification-service'
+    static_configs:
+      - targets: ['notification-service:8007']
+    metrics_path: /metrics
+
+  - job_name: 'assignment-service'
+    static_configs:
+      - targets: ['assignment-service:8008']
+    metrics_path: /metrics
+
+  - job_name: 'analytics-service'
+    static_configs:
+      - targets: ['analytics-service:8009']
+    metrics_path: /metrics
+
+  - job_name: 'ai-copilot-service'
+    static_configs:
+      - targets: ['ai-copilot-service:8010']
+    metrics_path: /metrics
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']

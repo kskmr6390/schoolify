@@ -1,0 +1,18 @@
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+httpx==0.27.0
+pydantic==2.7.1
+pydantic-settings==2.2.1
+# shared/security.py
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+# shared/database.py
+sqlalchemy[asyncio]==2.0.29
+asyncpg==0.29.0
+# shared/redis_client.py
+redis==5.0.4
+# shared/events.py
+aiokafka==0.10.0
+prometheus-fastapi-instrumentator==6.1.0
+structlog==24.1.0
+python-dotenv==1.0.1

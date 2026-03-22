@@ -1,0 +1,594 @@
+---
+# Auth Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: schoolify-prod
+  labels:
+    app: auth-service
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: schoolify-prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: auth-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: auth-service
+          image: ghcr.io/YOUR_ORG/schoolify/auth-service:latest
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth-service-hpa
+  namespace: schoolify-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: auth-service
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+# Tenant Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: tenant-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: tenant-service
+  ports:
+    - port: 8002
+      targetPort: 8002
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tenant-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tenant-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: tenant-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: tenant-service
+          image: ghcr.io/YOUR_ORG/schoolify/tenant-service:latest
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Student Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: student-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: student-service
+  ports:
+    - port: 8004
+      targetPort: 8004
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: student-service
+  namespace: schoolify-prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: student-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: student-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: student-service
+          image: ghcr.io/YOUR_ORG/schoolify/student-service:latest
+          ports:
+            - containerPort: 8004
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Attendance Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: attendance-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: attendance-service
+  ports:
+    - port: 8005
+      targetPort: 8005
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attendance-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: attendance-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: attendance-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: attendance-service
+          image: ghcr.io/YOUR_ORG/schoolify/attendance-service:latest
+          ports:
+            - containerPort: 8005
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8005
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Fee Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: fee-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: fee-service
+  ports:
+    - port: 8006
+      targetPort: 8006
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fee-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fee-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: fee-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: fee-service
+          image: ghcr.io/YOUR_ORG/schoolify/fee-service:latest
+          ports:
+            - containerPort: 8006
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8006
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Notification Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - port: 8007
+      targetPort: 8007
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: notification-service
+          image: ghcr.io/YOUR_ORG/schoolify/notification-service:latest
+          ports:
+            - containerPort: 8007
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8007
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+# Assignment Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: assignment-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: assignment-service
+  ports:
+    - port: 8008
+      targetPort: 8008
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assignment-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: assignment-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: assignment-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: assignment-service
+          image: ghcr.io/YOUR_ORG/schoolify/assignment-service:latest
+          ports:
+            - containerPort: 8008
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8008
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Analytics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: analytics-service
+  ports:
+    - port: 8009
+      targetPort: 8009
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: analytics-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: analytics-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: analytics-service
+          image: ghcr.io/YOUR_ORG/schoolify/analytics-service:latest
+          ports:
+            - containerPort: 8009
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8009
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# AI Copilot Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-copilot-service
+  namespace: schoolify-prod
+spec:
+  selector:
+    app: ai-copilot-service
+  ports:
+    - port: 8010
+      targetPort: 8010
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-copilot-service
+  namespace: schoolify-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ai-copilot-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ai-copilot-service
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: ai-copilot-service
+          image: ghcr.io/YOUR_ORG/schoolify/ai-copilot-service:latest
+          ports:
+            - containerPort: 8010
+          envFrom:
+            - configMapRef:
+                name: schoolify-config
+            - secretRef:
+                name: schoolify-secrets
+          volumeMounts:
+            - name: faiss-data
+              mountPath: /data/faiss_indexes
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: faiss-data
+          persistentVolumeClaim:
+            claimName: faiss-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: faiss-pvc
+  namespace: schoolify-prod
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc  # AWS EFS CSI driver for shared storage across replicas
+  resources:
+    requests:
+      storage: 10Gi

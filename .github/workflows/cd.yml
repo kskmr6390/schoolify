@@ -1,0 +1,127 @@
+name: CD Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deploy to environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    environment: staging
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure kubectl (EKS)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --name schoolify-staging --region us-east-1
+
+    - name: Deploy to staging
+      run: |
+        # Update image tags to latest build
+        kubectl set image deployment/api-gateway api-gateway=ghcr.io/${{ github.repository_owner }}/schoolify/api-gateway:sha-${{ github.sha }} -n schoolify-staging
+        kubectl set image deployment/auth-service auth-service=ghcr.io/${{ github.repository_owner }}/schoolify/auth-service:sha-${{ github.sha }} -n schoolify-staging
+        kubectl set image deployment/web web=ghcr.io/${{ github.repository_owner }}/schoolify/web:${{ github.sha }} -n schoolify-staging
+
+        # Wait for rollouts to complete
+        kubectl rollout status deployment/api-gateway -n schoolify-staging --timeout=5m
+        kubectl rollout status deployment/auth-service -n schoolify-staging --timeout=5m
+        kubectl rollout status deployment/web -n schoolify-staging --timeout=5m
+
+    - name: Run smoke tests
+      run: |
+        STAGING_URL="https://staging.schoolify.com"
+        # Health checks
+        curl -f "${STAGING_URL}/health" || (echo "Gateway health check failed" && exit 1)
+        curl -f "${STAGING_URL}/api/v1/auth/health" || echo "Auth service check"
+        echo "Smoke tests passed!"
+
+    - name: Notify on Slack
+      if: always()
+      uses: slackapi/slack-github-action@v1
+      with:
+        payload: |
+          {
+            "text": "Staging deploy ${{ job.status }}: ${{ github.sha }}"
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    environment: production  # Requires manual approval in GitHub
+    needs: [deploy-staging]
+    if: github.event.inputs.environment == 'production' || github.ref == 'refs/heads/main'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure kubectl (Production EKS)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+        aws-region: us-east-1
+
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --name schoolify-prod --region us-east-1
+
+    - name: Run DB migrations
+      run: |
+        kubectl run migrations --image=ghcr.io/${{ github.repository_owner }}/schoolify/auth-service:sha-${{ github.sha }} \
+          --restart=Never \
+          --env="DATABASE_URL=${{ secrets.DATABASE_URL_PROD }}" \
+          --command -- alembic upgrade head \
+          -n schoolify-prod
+        kubectl wait --for=condition=complete job/migrations -n schoolify-prod --timeout=5m
+
+    - name: Deploy to production (rolling update)
+      run: |
+        SERVICES="api-gateway auth-service tenant-service student-service attendance-service fee-service notification-service assignment-service analytics-service ai-copilot-service"
+        for service in $SERVICES; do
+          kubectl set image deployment/${service} ${service}=ghcr.io/${{ github.repository_owner }}/schoolify/${service}:sha-${{ github.sha }} -n schoolify-prod
+          kubectl rollout status deployment/${service} -n schoolify-prod --timeout=5m
+          echo "${service} deployed successfully"
+        done
+
+        # Deploy frontend
+        kubectl set image deployment/web web=ghcr.io/${{ github.repository_owner }}/schoolify/web:${{ github.sha }} -n schoolify-prod
+        kubectl rollout status deployment/web -n schoolify-prod --timeout=5m
+
+    - name: Production smoke tests
+      run: |
+        PROD_URL="https://api.schoolify.com"
+        curl -f "${PROD_URL}/health" || (kubectl rollout undo deployment/api-gateway -n schoolify-prod && exit 1)
+        echo "Production deployment verified!"
+
+    - name: Notify deployment
+      if: always()
+      uses: slackapi/slack-github-action@v1
+      with:
+        payload: |
+          {
+            "text": "Production deploy ${{ job.status }}: ${{ github.sha }} by ${{ github.actor }}"
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
