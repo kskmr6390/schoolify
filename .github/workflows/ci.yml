@@ -122,6 +122,7 @@ jobs:
           - assignment-service
           - analytics-service
           - ai-copilot-service
+          - migrations
 
     steps:
     - uses: actions/checkout@v4
