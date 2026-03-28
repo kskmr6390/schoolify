@@ -189,7 +189,7 @@ function RoleModal({
         })
       }
     } else {
-      const r = create(tenantId, { name: name.trim(), description: description.trim(), color, permissions: perms })
+      const r = create(tenantId, { name: name.trim(), description: description.trim(), color, permissions: perms, tenantId })
       if (user) {
         logStore.add({
           tenantId, userId: user.id,
@@ -318,7 +318,7 @@ export default function RolesPage() {
   const [editing, setEditing]         = useState<Role | null>(null)
   const [viewing, setViewing]         = useState<Role | null>(null)
 
-  const tenantId = tenant?.id ?? ''
+  const tenantId = tenant?.tenant_id ?? ''
   const roles = getAll(tenantId)
 
   const handleDelete = (role: Role) => {

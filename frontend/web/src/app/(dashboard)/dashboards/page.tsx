@@ -102,7 +102,7 @@ export default function DashboardsPage() {
   const { tenant } = useAuthStore()
   const { getTenantDashboards, remove } = useDashboardStore()
 
-  const tenantId = tenant?.id ?? 'default'
+  const tenantId = tenant?.tenant_id ?? 'default'
   const dashboards = getTenantDashboards(tenantId)
 
   const formatDate = (iso: string) =>
