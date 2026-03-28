@@ -6,7 +6,7 @@ from alembic import context
 
 # Import all models so Alembic can detect them
 from services.shared.database import Base
-from services.shared.config import get_settings
+from services.shared.config import settings
 
 # Auth service models
 from services.auth_service.models import User, OAuthAccount, RefreshToken, AuditLog
@@ -54,8 +54,6 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
-
-settings = get_settings()
 
 
 def get_url():
