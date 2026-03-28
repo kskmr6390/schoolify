@@ -237,7 +237,7 @@ export default function ActivityLogsPage() {
   const { tenant, user } = useAuthStore()
   const { getByTenant, clear } = useLogStore()
 
-  const tenantId = tenant?.id ?? ''
+  const tenantId = tenant?.tenant_id ?? ''
   const realLogs = getByTenant(tenantId)
   // Show demo logs if no real logs exist
   const allLogs  = realLogs.length > 0 ? realLogs : DEMO_LOGS

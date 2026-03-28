@@ -318,7 +318,7 @@ export default function RolesPage() {
   const [editing, setEditing]         = useState<Role | null>(null)
   const [viewing, setViewing]         = useState<Role | null>(null)
 
-  const tenantId = tenant?.id ?? ''
+  const tenantId = tenant?.tenant_id ?? ''
   const roles = getAll(tenantId)
 
   const handleDelete = (role: Role) => {

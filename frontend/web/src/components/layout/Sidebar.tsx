@@ -103,7 +103,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const { isOpen: chatOpen, toggle: toggleChat } = useChatWidgetStore()
 
   const navItems = NAV_BY_ROLE[user?.role || 'student'] || STUDENT_NAV
-  const tenantId = tenant?.id ?? ''
+  const tenantId = tenant?.tenant_id ?? ''
   const customDashboards = tenantId ? getTenantDashboards(tenantId) : []
   const canChat = CHAT_ROLES.has(user?.role ?? '')
 
