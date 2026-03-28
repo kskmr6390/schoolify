@@ -8,6 +8,7 @@ Run from project root:
 """
 
 import json
+import os
 import random
 import sys
 import uuid
@@ -21,7 +22,7 @@ except ImportError:
     sys.exit(1)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DB_DSN = "postgresql://schoolify:schoolify_dev_password@localhost:5432/schoolify"
+DB_DSN = os.environ.get("DATABASE_URL", "postgresql://schoolify:schoolify_dev_password@localhost:5432/schoolify")
 
 TENANT_ID    = "cccccccc-0000-0000-0000-000000000001"
 TENANT_SLUG  = "sbm"

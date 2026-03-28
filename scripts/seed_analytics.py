@@ -9,6 +9,7 @@ Usage:
 Requires: psycopg2-binary bcrypt
     pip3 install psycopg2-binary bcrypt
 """
+import os
 import uuid
 import random
 import bcrypt
@@ -18,7 +19,7 @@ import psycopg2.extras
 from datetime import date, datetime, timedelta
 
 # ── Config ────────────────────────────────────────────────────────────────────
-DB = "postgresql://schoolify:schoolify_dev_password@localhost:5433/schoolify"
+DB = os.environ.get("DATABASE_URL", "postgresql://schoolify:schoolify_dev_password@localhost:5433/schoolify")
 TENANT_ID = "47f46e0f-908c-4031-bc86-b3b3dfdff7cb"   # greenwood-high
 TODAY = date(2026, 3, 23)
 

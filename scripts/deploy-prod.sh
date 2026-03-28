@@ -49,6 +49,7 @@ SCP="scp -o StrictHostKeyChecking=no"
 echo "→ Syncing docker-compose.prod.yml..."
 $SSH "mkdir -p /opt/schoolify/faiss_indexes"
 $SCP "$REPO_ROOT/docker/docker-compose.prod.yml" "root@$VPS_IP:$COMPOSE_FILE"
+$SCP "$REPO_ROOT/docker/prometheus.prod.yml" "root@$VPS_IP:/opt/schoolify/prometheus.prod.yml"
 
 # ── GHCR login (needed for private packages) ──────────────────────────────────
 # Set GHCR_TOKEN env var locally, or store it in /opt/schoolify/.env on the VPS
