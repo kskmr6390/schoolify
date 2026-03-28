@@ -364,3 +364,18 @@ env/
 # Local development
 .local/
 .dev/
+
+# Terraform — secrets must never be committed
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/*.tfstate*
+infra/terraform/*.tf.disabled
+
+# Claude Code — local permissions/settings contain session tokens
+.claude/
+
+# Docker env overrides with real credentials
+docker/.env

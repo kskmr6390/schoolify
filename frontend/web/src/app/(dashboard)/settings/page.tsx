@@ -7,7 +7,7 @@ import {
   Shield, Clock, MapPin, Building, Hash,
   AlertCircle, CheckCircle2, Sliders, Brain, Cpu, Play, RefreshCw,
   Eye, EyeOff, Zap, Database, CheckSquare, Square, Terminal,
-  RotateCcw, Calendar, FlaskConical, ChevronUp,
+  RotateCcw, Calendar, FlaskConical, ChevronUp, Trash2, Download, AlertTriangle,
 } from 'lucide-react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import api from '../../../lib/api'
@@ -19,6 +19,8 @@ import {
 import { testConnection } from '../../../lib/aiService'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
+
+type ModelStatusType = 'unknown' | 'checking' | 'downloaded' | 'not_downloaded' | 'downloading' | 'deleting'
 
 type Tab =
   | 'school'
@@ -329,49 +331,223 @@ export default function SettingsPage() {
 
   // ── AI store ──
   const ai = useAIStore()
-  const [showKey, setShowKey]         = useState<Record<string, boolean>>({})
-  const [testState, setTestState]     = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
-  const [testMsg, setTestMsg]         = useState('')
+  const [showKey, setShowKey]           = useState<Record<string, boolean>>({})
+  const [testState, setTestState]       = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
+  const [testMsg, setTestMsg]           = useState('')
   const [showTrainCfg, setShowTrainCfg] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
-  const [showRAG, setShowRAG]         = useState(false)
-  const [showLogs, setShowLogs]       = useState(false)
+  const [showRAG, setShowRAG]           = useState(false)
+  const [showLogs, setShowLogs]         = useState(false)
+  const [scheduleSaving, setScheduleSaving] = useState(false)
+  const [scheduleSaved, setScheduleSaved]   = useState(false)
+  const [scheduleNextRun, setScheduleNextRun] = useState<string | null>(null)
   const trainingTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const selectedProvider = AI_PROVIDERS.find(p => p.id === ai.provider)!
   const isLocal = ai.provider === 'local'
 
-  // Training simulation
-  const startLocalTraining = useCallback(() => {
+  // ── Per-arch download status ──
+  const [modelStatuses, setModelStatuses] = useState<Record<string, ModelStatusType>>({})
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+
+  // ── Ollama health + active model tracking ──
+  const [ollamaHealth, setOllamaHealth] = useState<'checking' | 'running' | 'down'>('checking')
+  const [activeModelArch, setActiveModelArch] = useState<string | null>(null)
+
+  const setArchStatus = (arch: string, status: ModelStatusType) =>
+    setModelStatuses((prev: Record<string, ModelStatusType>) => ({ ...prev, [arch]: status }))
+
+  // Check all arch download statuses on mount (local mode only)
+  useEffect(() => {
+    if (!isLocal) return
+    LOCAL_ARCHITECTURES.forEach(({ id }) => {
+      setArchStatus(id, 'checking')
+      api.get(`/api/v1/copilot/model/status?arch=${id}`)
+        .then((res: any) => setArchStatus(id, res.data?.ready ? 'downloaded' : 'not_downloaded'))
+        .catch(() => setArchStatus(id, 'unknown'))
+    })
+  }, [isLocal]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ollama health check on mount
+  useEffect(() => {
+    if (!isLocal) return
+    setOllamaHealth('checking')
+    api.get('/api/v1/copilot/ollama/health')
+      .then((res: any) => setOllamaHealth(res.data?.running ? 'running' : 'down'))
+      .catch(() => setOllamaHealth('down'))
+  }, [isLocal]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pullModel = useCallback(async (arch: string) => {
+    setArchStatus(arch, 'downloading')
+    try {
+      await api.post('/api/v1/copilot/model/pull', { arch })
+      const poll = setInterval(async () => {
+        try {
+          const r = await api.get(`/api/v1/copilot/model/status?arch=${arch}`) as any
+          if (r.data?.ready) { clearInterval(poll); setArchStatus(arch, 'downloaded') }
+        } catch { /* keep polling */ }
+      }, 4000)
+    } catch {
+      setArchStatus(arch, 'not_downloaded')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const deleteModel = useCallback(async (arch: string) => {
+    setDeleteConfirm(null)
+    setArchStatus(arch, 'deleting')
+    try {
+      await (api as any).delete('/api/v1/copilot/model', { data: { arch } })
+      setArchStatus(arch, 'not_downloaded')
+    } catch {
+      setArchStatus(arch, 'downloaded')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Load training history + schedule from DB on mount ──
+  useEffect(() => {
+    if (!isLocal) return
+    // Load jobs
+    api.get('/api/v1/copilot/train').then((res: any) => {
+      const jobs = (res.data as any[]) ?? []
+      // Track which model is currently serving (last completed job)
+      const lastCompleted = jobs.find((j: any) => j.status === 'completed')
+      if (lastCompleted?.model_arch) setActiveModelArch(lastCompleted.model_arch)
+      // Sync into store as TrainingJob array
+      ai.setTrainParam('trainingJobs', jobs.map((j: any) => ({
+        id:         j.id,
+        startedAt:  j.started_at,
+        finishedAt: j.finished_at,
+        status:     j.status === 'running' ? 'running' : j.status === 'completed' ? 'completed' : 'failed',
+        progress:   j.progress,
+        dataPoints: j.data_points,
+        duration:   j.duration_sec ? `${j.duration_sec}s` : null,
+        notes:      `${j.model_arch} · ${(j.data_sources ?? []).join(', ')}`,
+      })))
+    }).catch(() => {})
+    // Load schedule
+    api.get('/api/v1/copilot/schedule').then((res: any) => {
+      const s = res.data as any
+      if (s?.freq && s.freq !== 'manual') {
+        ai.setTrainParam('scheduleFreq', s.freq)
+        if (s.time_of_day) ai.setTrainParam('scheduleTime', s.time_of_day)
+        if (s.day_of_week != null) ai.setTrainParam('scheduleDow', s.day_of_week)
+        if (s.next_run_at) setScheduleNextRun(s.next_run_at)
+      }
+    }).catch(() => {})
+  }, [isLocal]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Save schedule to backend ──
+  const saveSchedule = useCallback(async () => {
+    setScheduleSaving(true)
+    try {
+      const res = await api.post('/api/v1/copilot/schedule', {
+        freq:         ai.scheduleFreq,
+        time_of_day:  ai.scheduleTime,
+        day_of_week:  ai.scheduleFreq === 'weekly' ? ai.scheduleDow : null,
+        data_sources: ai.trainSources,
+        model_arch:   ai.localArch,
+        config: {
+          epochs:        ai.trainEpochs,
+          learning_rate: ai.trainLR,
+          batch_size:    ai.trainBatch,
+          max_seq_len:   ai.trainMaxLen,
+          model_size:    ai.trainModelSize,
+          chunk_size:    ai.ragChunkSize,
+          overlap:       ai.ragOverlap,
+          top_k:         ai.ragTopK,
+          threshold:     ai.ragThreshold,
+        },
+      }) as any
+      if (res.data?.next_run_at) setScheduleNextRun(res.data.next_run_at)
+      setScheduleSaved(true)
+      setTimeout(() => setScheduleSaved(false), 3000)
+    } catch { /* ignore */ }
+    finally { setScheduleSaving(false) }
+  }, [ai])
+
+  // ── Real training — calls backend with full config, polls for progress ──
+  const startLocalTraining = useCallback(async () => {
     const tenantId = (user as any)?.tenant_id ?? 'demo'
     ai.startTraining(tenantId)
 
-    let pct = 0
-    const epoch = Math.max(1, ai.trainEpochs)
-    const stepMs = Math.round((40_000) / (epoch * 10))
+    let jobId: string | null = null
+    try {
+      const res = await api.post('/api/v1/copilot/train', {
+        data_sources: ai.trainSources,
+        model_arch:   ai.localArch,
+        config: {
+          epochs:        ai.trainEpochs,
+          learning_rate: ai.trainLR,
+          batch_size:    ai.trainBatch,
+          max_seq_len:   ai.trainMaxLen,
+          model_size:    ai.trainModelSize,
+          chunk_size:    ai.ragChunkSize,
+          overlap:       ai.ragOverlap,
+          top_k:         ai.ragTopK,
+          threshold:     ai.ragThreshold,
+        },
+      }) as any
+      jobId = res.data?.job_id ?? null
+    } catch (err: any) {
+      ai.updateProgress(0, [`[${new Date().toLocaleTimeString()}] Failed to start: ${err.message}`])
+      ai.finishTraining(false)
+      return
+    }
 
-    const STEP_LOGS = (ep: number, step: number) => [
-      `[${new Date().toLocaleTimeString()}] Epoch ${ep}/${epoch} — step ${step}: loss=${(1.8 - pct * 0.015).toFixed(4)}`,
-    ]
+    if (!jobId) { ai.finishTraining(false); return }
 
-    trainingTimer.current = setInterval(() => {
-      pct = Math.min(pct + 1, 100)
-      const ep   = Math.ceil((pct / 100) * epoch)
-      const step = Math.ceil(((pct % (100 / epoch)) / (100 / epoch)) * 50)
-
-      ai.updateProgress(pct, STEP_LOGS(ep, step))
-
-      if (pct >= 100) {
-        clearInterval(trainingTimer.current!)
-        trainingTimer.current = null
-        ai.finishTraining(true)
-      }
-    }, stepMs)
+    // Poll every 2 s — real progress + logs come from DB via backend
+    trainingTimer.current = setInterval(async () => {
+      try {
+        const status = await api.get(`/api/v1/copilot/train/${jobId}`) as any
+        const job = status.data as {
+          status: string; progress: number; logs: string[]
+          phase: string; data_points: number; vectors_indexed: number
+        }
+        ai.updateProgress(job.progress, job.logs ?? [])
+        if (job.status === 'completed') {
+          clearInterval(trainingTimer.current!); trainingTimer.current = null
+          ai.finishTraining(true)
+          // New model is now active — update display
+          if ((job as any).model_arch) setActiveModelArch((job as any).model_arch)
+          // Refresh history from DB
+          api.get('/api/v1/copilot/train').then((r: any) => {
+            const jobs = (r.data as any[]) ?? []
+            const lastCompleted = jobs.find((j: any) => j.status === 'completed')
+            if (lastCompleted?.model_arch) setActiveModelArch(lastCompleted.model_arch)
+            ai.setTrainParam('trainingJobs', jobs.map((j: any) => ({
+              id:         j.id,
+              startedAt:  j.started_at,
+              finishedAt: j.finished_at,
+              status:     j.status,
+              progress:   j.progress,
+              dataPoints: j.data_points,
+              duration:   j.duration_sec ? `${j.duration_sec}s` : null,
+              notes:      `${j.model_arch} · ${(j.data_sources ?? []).join(', ')}`,
+            })))
+          }).catch(() => {})
+        } else if (job.status === 'failed' || job.status === 'cancelled') {
+          clearInterval(trainingTimer.current!); trainingTimer.current = null
+          ai.finishTraining(false)
+        }
+      } catch { /* transient — keep polling */ }
+    }, 2000)
   }, [ai, user])
 
   useEffect(() => {
     return () => { if (trainingTimer.current) clearInterval(trainingTimer.current) }
   }, [])
+
+  const restartTraining = useCallback(async () => {
+    // Cancel running job in DB (doesn't stop the bg task but marks it cancelled)
+    const runningJob = ai.trainingJobs.find((j: TrainingJob) => j.status === 'running')
+    if (runningJob) {
+      try { await api.post(`/api/v1/copilot/train/${runningJob.id}/cancel`) } catch { /* ignore */ }
+    }
+    if (trainingTimer.current) { clearInterval(trainingTimer.current); trainingTimer.current = null }
+    ai.finishTraining(false) // reset UI to idle so startLocalTraining can run
+    await startLocalTraining()
+  }, [ai, startLocalTraining]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleTest = async () => {
     setTestState('testing'); setTestMsg('')
@@ -410,6 +586,12 @@ export default function SettingsPage() {
   const saveDropdown = (key: string, values: string[]) => update.mutate({ [key]: JSON.stringify(values) })
 
   const isDirty = Object.keys(editing).length > 0
+
+  // ── Derived model-picker state (used in JSX below) ──
+  const isAdmin        = (user as any)?.role === 'admin'
+  const anyDownloaded  = LOCAL_ARCHITECTURES.some(a => modelStatuses[a.id] === 'downloaded')
+  const activeArchStatus    = modelStatuses[ai.localArch]
+  const activeArchDownloaded = activeArchStatus === 'downloaded'
 
   return (
     <div className="space-y-6">
@@ -956,7 +1138,22 @@ export default function SettingsPage() {
                     <div className="space-y-5">
                       {/* Status card */}
                       <div className="bg-white rounded-xl border border-gray-200 p-6">
-                        <SectionTitle icon={Cpu} title="Local LLM" subtitle="Train and run your own model on tenant data — stays fully private" />
+                        <div className="flex items-start justify-between gap-2 mb-4">
+                          <SectionTitle icon={Cpu} title="Local LLM" subtitle="Train and run your own model on tenant data — stays fully private" />
+                          {/* Ollama health indicator */}
+                          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium flex-shrink-0 ${
+                            ollamaHealth === 'checking' ? 'bg-gray-100 text-gray-400' :
+                            ollamaHealth === 'running'  ? 'bg-green-50 text-green-700 border border-green-200' :
+                                                          'bg-red-50 text-red-600 border border-red-200'
+                          }`}>
+                            <div className={`w-1.5 h-1.5 rounded-full ${
+                              ollamaHealth === 'checking' ? 'bg-gray-300 animate-pulse' :
+                              ollamaHealth === 'running'  ? 'bg-green-500' : 'bg-red-500'
+                            }`} />
+                            {ollamaHealth === 'checking' ? 'Checking…' :
+                             ollamaHealth === 'running'  ? 'Ollama running' : 'Ollama unreachable'}
+                          </div>
+                        </div>
 
                         {/* Status badge */}
                         <div className={`flex items-center gap-3 p-4 rounded-xl mb-5 ${
@@ -973,12 +1170,18 @@ export default function SettingsPage() {
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-gray-900">
                               {ai.localStatus === 'ready'    ? 'Model ready' :
-                               ai.localStatus === 'training' ? `Training — ${ai.localProgress}%` :
+                               ai.localStatus === 'training' ? `Training new model — ${ai.localProgress}%` :
                                ai.localStatus === 'failed'   ? 'Training failed' : 'Not trained yet'}
                             </p>
+                            {ai.localStatus === 'training' && activeModelArch && (
+                              <p className="text-xs text-blue-600 mt-0.5">
+                                Current model still serving chats: <strong>{LOCAL_ARCHITECTURES.find(a => a.id === activeModelArch)?.name ?? activeModelArch}</strong>
+                              </p>
+                            )}
                             {ai.localTrainedAt && ai.localStatus === 'ready' && (
                               <p className="text-xs text-gray-500 mt-0.5">
                                 Last trained: {new Date(ai.localTrainedAt).toLocaleString()}
+                                {activeModelArch && <span className="ml-2 font-medium text-gray-700">· Active: {LOCAL_ARCHITECTURES.find(a => a.id === activeModelArch)?.name ?? activeModelArch}</span>}
                               </p>
                             )}
                           </div>
@@ -1001,41 +1204,103 @@ export default function SettingsPage() {
                         <Field label="Model Architecture" hint="Larger models are more accurate but require more RAM and training time">
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
                             {LOCAL_ARCHITECTURES.map(arch => {
-                              const active = ai.localArch === arch.id
+                              const active         = ai.localArch === arch.id
+                              const st             = modelStatuses[arch.id] ?? 'unknown'
+                              const isDownloaded   = st === 'downloaded'
+                              const isDownloading  = st === 'downloading'
+                              const isChecking     = st === 'checking'
+                              const isDeleting     = st === 'deleting'
+                              const awaitingDelete = deleteConfirm === arch.id
                               return (
-                                <button key={arch.id} onClick={() => ai.setLocalArch(arch.id)}
-                                  disabled={ai.localStatus === 'training'}
-                                  className={`flex items-start gap-3 p-3 rounded-lg border text-left transition ${
-                                    active ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'
-                                  } disabled:opacity-50`}>
-                                  <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${active ? 'bg-indigo-500' : 'bg-gray-300'}`} />
-                                  <div>
-                                    <p className={`text-sm font-medium ${active ? 'text-indigo-700' : 'text-gray-800'}`}>{arch.name}</p>
-                                    <p className="text-xs text-gray-400">{arch.size} &bull; RAM: {arch.ram} &bull; {arch.speed}</p>
-                                  </div>
-                                </button>
+                                <div key={arch.id} className={`relative rounded-lg border transition ${
+                                  active ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'
+                                } ${ai.localStatus === 'training' ? 'opacity-50 pointer-events-none' : ''}`}>
+                                  <button onClick={() => ai.setLocalArch(arch.id)}
+                                    className="flex items-start gap-3 p-3 w-full text-left">
+                                    <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                                      isChecking || isDownloading || isDeleting ? 'bg-yellow-400 animate-pulse' :
+                                      isDownloaded ? 'bg-green-500' :
+                                      active ? 'bg-indigo-500' : 'bg-gray-300'
+                                    }`} />
+                                    <div className="flex-1 min-w-0">
+                                      <p className={`text-sm font-medium ${active ? 'text-indigo-700' : 'text-gray-800'}`}>{arch.name}</p>
+                                      <p className="text-xs text-gray-400">{arch.size} &bull; RAM: {arch.ram} &bull; {arch.speed}</p>
+                                    </div>
+                                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                      isChecking    ? 'bg-gray-100 text-gray-400' :
+                                      isDownloading ? 'bg-yellow-50 text-yellow-600' :
+                                      isDeleting    ? 'bg-red-50 text-red-400' :
+                                      isDownloaded  ? 'bg-green-50 text-green-600' :
+                                                      'bg-gray-100 text-gray-400'
+                                    }`}>
+                                      {isChecking ? '…' : isDownloading ? 'Downloading' : isDeleting ? 'Deleting' : isDownloaded ? '✓ Ready' : 'Not downloaded'}
+                                    </span>
+                                  </button>
+
+                                  {/* Admin delete button */}
+                                  {isAdmin && isDownloaded && !awaitingDelete && (
+                                    <button
+                                      onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); setDeleteConfirm(arch.id) }}
+                                      className="absolute top-2 right-2 p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition">
+                                      <Trash2 size={12} />
+                                    </button>
+                                  )}
+                                  {isAdmin && awaitingDelete && (
+                                    <div className="flex items-center gap-2 px-3 pb-2">
+                                      <AlertTriangle size={12} className="text-amber-500 flex-shrink-0" />
+                                      <span className="text-xs text-gray-600 flex-1">Delete this model?</span>
+                                      <button onClick={() => deleteModel(arch.id)} className="text-xs text-red-600 font-medium hover:underline">Yes</button>
+                                      <button onClick={() => setDeleteConfirm(null)} className="text-xs text-gray-400 hover:underline">No</button>
+                                    </div>
+                                  )}
+                                </div>
                               )
                             })}
                           </div>
+
+                          {/* No models downloaded warning */}
+                          {!anyDownloaded && LOCAL_ARCHITECTURES.every(a => modelStatuses[a.id] !== 'checking') && (
+                            <div className="mt-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                              <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                              <p className="text-xs text-amber-700">No models downloaded. Select one and click <strong>Download &amp; Train</strong> to get started.</p>
+                            </div>
+                          )}
                         </Field>
 
-                        {/* Train button */}
-                        <div className="mt-5 flex items-center gap-3">
-                          <button onClick={startLocalTraining}
-                            disabled={ai.localStatus === 'training'}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
-                            {ai.localStatus === 'training'
-                              ? <><Loader2 size={15} className="animate-spin" /> Training...</>
-                              : <><Play size={15} fill="currentColor" /> {ai.localStatus === 'ready' ? 'Re-train Model' : 'Start Training'}</>
+                        {/* Train / download button */}
+                        <div className="mt-5 flex items-center gap-3 flex-wrap">
+                          <button
+                            onClick={activeArchDownloaded ? startLocalTraining : () => pullModel(ai.localArch)}
+                            disabled={
+                              ai.localStatus === 'training' ||
+                              activeArchStatus === 'downloading' ||
+                              activeArchStatus === 'checking' ||
+                              activeArchStatus === 'deleting'
                             }
+                            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition">
+                            {ai.localStatus === 'training' ? (
+                              <><Loader2 size={15} className="animate-spin" /> Training...</>
+                            ) : activeArchStatus === 'downloading' ? (
+                              <><Loader2 size={15} className="animate-spin" /> Downloading...</>
+                            ) : !activeArchDownloaded ? (
+                              <><Download size={15} /> Download &amp; Train</>
+                            ) : (
+                              <><Play size={15} fill="currentColor" /> {ai.localStatus === 'ready' ? 'Re-train Model' : 'Start Training'}</>
+                            )}
                           </button>
+                          {ai.localStatus === 'training' && (
+                            <button onClick={restartTraining}
+                              className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition">
+                              <RotateCcw size={14} /> Restart Training
+                            </button>
+                          )}
                           {(ai.localStatus === 'ready' || ai.localStatus === 'failed') && (
                             <button onClick={() => ai.clearIndex()}
                               className="flex items-center gap-2 px-4 py-2.5 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition">
                               <RotateCcw size={14} /> Reset
                             </button>
                           )}
-                          <button onClick={() => setShowLogs(s => !s)}
+                          <button onClick={() => setShowLogs((s: boolean) => !s)}
                             className="ml-auto flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 transition">
                             <Terminal size={13} /> {showLogs ? 'Hide' : 'Show'} logs
                           </button>
@@ -1173,14 +1438,35 @@ export default function SettingsPage() {
                             {ai.scheduleFreq !== 'manual' && (
                               <div className="p-3 bg-indigo-50 rounded-lg text-sm text-indigo-700 flex items-center gap-2">
                                 <RefreshCw size={14} />
-                                Next run: {ai.scheduleFreq === 'daily'
-                                  ? `Tomorrow at ${ai.scheduleTime}`
-                                  : ai.scheduleFreq === 'weekly'
-                                    ? `Next ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][ai.scheduleDow]} at ${ai.scheduleTime}`
-                                    : `1st of next month at ${ai.scheduleTime}`
+                                {scheduleNextRun
+                                  ? `Next run: ${new Date(scheduleNextRun).toLocaleString()}`
+                                  : `Next run: ${ai.scheduleFreq === 'daily'
+                                      ? `Tomorrow at ${ai.scheduleTime}`
+                                      : ai.scheduleFreq === 'weekly'
+                                        ? `Next ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][ai.scheduleDow]} at ${ai.scheduleTime}`
+                                        : `1st of next month at ${ai.scheduleTime}`}`
                                 }
                               </div>
                             )}
+
+                            {/* Save schedule button */}
+                            <div className="flex items-center gap-3 pt-1">
+                              <button
+                                onClick={saveSchedule}
+                                disabled={scheduleSaving}
+                                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition"
+                              >
+                                {scheduleSaving
+                                  ? <><Loader2 size={14} className="animate-spin" /> Saving...</>
+                                  : <><Save size={14} /> Save Schedule</>
+                                }
+                              </button>
+                              {scheduleSaved && (
+                                <span className="flex items-center gap-1.5 text-sm text-green-600">
+                                  <CheckCircle2 size={14} /> Schedule saved
+                                </span>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>

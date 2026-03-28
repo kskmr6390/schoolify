@@ -236,7 +236,7 @@ async def school_analytics(
         overview_row = (await db.execute(text("""
             SELECT
               (SELECT count(*) FROM students    WHERE tenant_id=:tid AND status='ACTIVE')  AS total_students,
-              (SELECT count(*) FROM users       WHERE tenant_id=:tid AND role::text='teacher' AND status='ACTIVE') AS total_teachers,
+              (SELECT count(*) FROM users       WHERE tenant_id=:tid AND role::text='TEACHER' AND status='ACTIVE') AS total_teachers,
               (SELECT count(*) FROM classes     WHERE tenant_id=:tid)                      AS total_classes,
               (SELECT count(*) FROM subjects    WHERE tenant_id=:tid AND is_active=true)   AS total_subjects,
               (SELECT COALESCE(SUM(paid_amount),0) FROM invoices WHERE tenant_id=:tid)     AS fee_collected,
@@ -415,7 +415,7 @@ async def school_analytics(
         # ── 8. Assignment submission rate ────────────────────────────────────
         assign_row = (await db.execute(text("""
             SELECT
-              COUNT(*) FILTER (WHERE sub.status::text IN ('submitted','graded')) AS submitted,
+              COUNT(*) FILTER (WHERE UPPER(sub.status::text) IN ('SUBMITTED','GRADED')) AS submitted,
               COUNT(*) AS total
             FROM   assignments a
             JOIN   submissions sub ON sub.assignment_id=a.id
@@ -523,6 +523,7 @@ BOARD_REQUIREMENTS = {
 
 
 @router.get("/compliance/dashboard", response_model=StandardResponse)
+@router.get("/analytics/compliance/dashboard", response_model=StandardResponse, include_in_schema=False)
 async def compliance_dashboard(
     current_user: TokenData = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -548,7 +549,7 @@ async def compliance_dashboard(
               (SELECT COUNT(*) FROM exam_results WHERE tenant_id=:tid AND is_pass=true) AS passed_exams,
               (SELECT COUNT(*) FROM exam_results WHERE tenant_id=:tid AND is_pass IS NOT NULL) AS total_results,
               (SELECT COUNT(DISTINCT date) FROM attendance_records WHERE tenant_id=:tid AND date >= CURRENT_DATE - INTERVAL '180 days') AS working_days,
-              (SELECT COUNT(*) FROM submissions WHERE status::text IN ('submitted','graded')) AS submitted_assignments,
+              (SELECT COUNT(*) FROM submissions WHERE UPPER(status::text) IN ('SUBMITTED','GRADED')) AS submitted_assignments,
               (SELECT COUNT(*) FROM submissions) AS total_assignments
         """), {"tid": tid})).fetchone()
 
@@ -686,4 +687,127 @@ async def compliance_dashboard(
         "govt_notifications": GOVT_NOTIFICATIONS,
         "last_updated": str(date.today()),
         "metrics": metrics_map,
+    })
+
+
+# ─── LLM Analytics ──────────────────────────────────────────────────────────
+
+# Pricing per 1K tokens (USD) — industry standard rates
+LLM_PRICING: dict = {
+    "claude":  {"input": 0.003, "output": 0.015, "label": "Claude Sonnet 3.5"},
+    "google":  {"input": 0.000075, "output": 0.0003, "label": "Gemini 1.5 Flash"},
+    "openai":  {"input": 0.0025, "output": 0.010,  "label": "GPT-4o"},
+    "local":   {"input": 0.0,    "output": 0.0,    "label": "Local (Ollama)"},
+}
+
+
+def _calc_cost(provider: str, tokens_in: int, tokens_out: int) -> float:
+    p = LLM_PRICING.get(provider, LLM_PRICING["local"])
+    return round(tokens_in / 1000 * p["input"] + tokens_out / 1000 * p["output"], 4)
+
+
+@router.get("/llm-analytics/usage", response_model=StandardResponse)
+async def llm_usage_analytics(
+    days: int = Query(default=30, ge=7, le=90),
+    current_user: TokenData = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """LLM usage analytics: cost, savings, provider breakdown."""
+    tid = UUIDT(current_user.tenant_id)
+    since = date.today() - timedelta(days=days - 1)
+
+    rows = (await db.execute(text("""
+        SELECT log_date, provider, model_name,
+               query_count, tokens_input, tokens_output, cost_usd
+        FROM   llm_usage_logs
+        WHERE  tenant_id = :tid AND log_date >= :since
+        ORDER  BY log_date, provider
+    """), {"tid": tid, "since": since})).fetchall()
+
+    # ── aggregate by provider ──────────────────────────────────────────────
+    by_provider: dict = {}
+    daily: dict = {}
+
+    for r in rows:
+        d_str = str(r[0])
+        prov   = r[1]
+        qc     = int(r[3])
+        t_in   = int(r[4])
+        t_out  = int(r[5])
+        cost   = float(r[6])
+
+        if prov not in by_provider:
+            by_provider[prov] = {"queries": 0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+        by_provider[prov]["queries"]    += qc
+        by_provider[prov]["tokens_in"]  += t_in
+        by_provider[prov]["tokens_out"] += t_out
+        by_provider[prov]["cost_usd"]   += cost
+
+        if d_str not in daily:
+            daily[d_str] = {}
+        daily[d_str][prov] = daily[d_str].get(prov, 0) + qc
+
+    # ── summary ───────────────────────────────────────────────────────────
+    total_queries = sum(v["queries"]   for v in by_provider.values())
+    total_t_in    = sum(v["tokens_in"] for v in by_provider.values())
+    total_t_out   = sum(v["tokens_out"] for v in by_provider.values())
+    actual_cost   = round(sum(v["cost_usd"] for v in by_provider.values()), 4)
+
+    # Hypothetical costs if everything had been cloud
+    if_all_claude = round(_calc_cost("claude", total_t_in, total_t_out), 2)
+    if_all_gemini = round(_calc_cost("google", total_t_in, total_t_out), 2)
+    if_all_openai = round(_calc_cost("openai", total_t_in, total_t_out), 2)
+    savings_vs_claude = round(max(if_all_claude - actual_cost, 0), 2)
+
+    local_q = by_provider.get("local", {}).get("queries", 0)
+
+    provider_breakdown = []
+    for prov, vals in sorted(by_provider.items()):
+        provider_breakdown.append({
+            "provider": prov,
+            "label":    LLM_PRICING.get(prov, {}).get("label", prov.title()),
+            "queries":  vals["queries"],
+            "tokens_in":  vals["tokens_in"],
+            "tokens_out": vals["tokens_out"],
+            "cost_usd": round(vals["cost_usd"], 4),
+            "pct": round(vals["queries"] / max(total_queries, 1) * 100, 1),
+        })
+
+    # ── daily trend (fill missing days with 0) ────────────────────────────
+    all_provs = list(by_provider.keys()) or ["local"]
+    daily_trend = []
+    for i in range(days):
+        d = since + timedelta(days=i)
+        d_str = str(d)
+        entry: dict = {"date": d_str, "day": d.strftime("%b %d")}
+        for p in all_provs:
+            entry[p] = daily.get(d_str, {}).get(p, 0)
+        daily_trend.append(entry)
+
+    # ── cost comparison table ─────────────────────────────────────────────
+    cost_comparison = [
+        {"label": "Actual (current mix)",  "cost": actual_cost,   "color": "#4F46E5"},
+        {"label": "If all Claude Sonnet",  "cost": if_all_claude, "color": "#ef4444"},
+        {"label": "If all Gemini Flash",   "cost": if_all_gemini, "color": "#f59e0b"},
+        {"label": "If all GPT-4o",         "cost": if_all_openai, "color": "#8b5cf6"},
+    ]
+
+    return StandardResponse(success=True, data={
+        "summary": {
+            "total_queries":       total_queries,
+            "local_queries":       local_q,
+            "cloud_queries":       total_queries - local_q,
+            "local_pct":           round(local_q / max(total_queries, 1) * 100, 1),
+            "total_tokens":        total_t_in + total_t_out,
+            "actual_cost_usd":     actual_cost,
+            "if_all_claude_usd":   if_all_claude,
+            "if_all_gemini_usd":   if_all_gemini,
+            "savings_usd":         savings_vs_claude,
+            "savings_pct":         round(savings_vs_claude / max(if_all_claude, 0.0001) * 100, 1),
+        },
+        "provider_breakdown": provider_breakdown,
+        "daily_trend":        daily_trend,
+        "cost_comparison":    cost_comparison,
+        "pricing_reference":  LLM_PRICING,
+        "period_days":        days,
     })

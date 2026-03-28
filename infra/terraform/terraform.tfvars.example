@@ -1,0 +1,81 @@
+# Schoolify Tier 1 — Terraform variable values
+# Copy to terraform.tfvars and fill in real values.
+#
+# IMPORTANT: terraform.tfvars contains secrets — it is already in .gitignore.
+#            Never commit it to git.
+#
+# ── Minimum required to deploy ───────────────────────────────────────────────
+#   hetzner_api_token, ssh_public_key, domain, neon_api_key, secret_key, github_repo
+#
+# ── Optional (leave as "" to skip — add later by re-running ./deploy.sh) ─────
+#   upstash_*         → Kafka + Redis event bus and cache
+#   b2_*              → File uploads (student import, attachments)
+#   vercel_api_token  → Deploy Next.js frontend automatically
+#   smtp_*            → Email notifications
+#   anthropic_api_key → AI Copilot feature
+#   google_*          → Google SSO login
+#   grafana_*         → Cloud monitoring dashboard
+#
+# Usage:
+#   cp terraform.tfvars.example terraform.tfvars
+#   # fill in what you have, leave the rest as ""
+#   ./deploy.sh          ← auto-detects what's set, skips the rest cleanly
+
+# ── Hetzner Cloud ─────────────────────────────────────────────────────────────
+# Create token at: console.hetzner.com → <project> → Security → API Tokens
+# Permission: Read & Write
+hetzner_api_token = "hXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# Paste your public key: cat ~/.ssh/id_ed25519.pub
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... you@machine"
+
+domain          = "schoolify.app"      # API served at api.schoolify.app
+server_location = "nbg1"               # Nuremberg — closest EU Hetzner DC
+
+# ── Neon Postgres ─────────────────────────────────────────────────────────────
+# Create key at: console.neon.tech → Account → API Keys
+neon_api_key = "neon_api_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+neon_region  = "aws-eu-central-1"      # Frankfurt — pairs well with nbg1
+
+# ── Upstash ───────────────────────────────────────────────────────────────────
+# API key at: console.upstash.com → Account → Management API
+upstash_email   = "you@example.com"
+upstash_api_key = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+upstash_region  = "eu-west-1"          # Ireland — nearest Upstash region to nbg1
+
+# ── Backblaze B2 ──────────────────────────────────────────────────────────────
+# Master key at: backblazeb2.com → My Account → App Keys → Add a Master Application Key
+b2_application_key_id = "00XXXXXXXXXXXXXXXXXXXXXXXXX"
+b2_application_key    = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+b2_bucket_name        = "schoolify-uploads-yourname" # must be globally unique!
+b2_endpoint           = "https://s3.eu-central-003.backblazeb2.com" # shown in B2 console
+
+# ── Vercel ────────────────────────────────────────────────────────────────────
+# Token at: vercel.com → Settings → Tokens → Create
+vercel_api_token = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+vercel_team_id   = ""                  # leave empty for personal account
+github_repo      = "your-username/schoolify"
+
+# ── App secrets ───────────────────────────────────────────────────────────────
+# Generate: python -c "import secrets; print(secrets.token_hex(32))"
+secret_key        = "replace-with-64-char-hex-string-generated-above"
+
+# From: console.anthropic.com → API Keys
+anthropic_api_key = "sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# ── Google OAuth (optional — enables SSO login) ───────────────────────────────
+# Create at: console.cloud.google.com → APIs & Services → Credentials
+google_client_id     = ""
+google_client_secret = ""
+
+# ── SMTP — Resend recommended (resend.com — 3000 free emails/month) ───────────
+# SMTP details at: resend.com → SMTP → Generate API key
+smtp_host     = "smtp.resend.com"
+smtp_port     = 465
+smtp_user     = "resend"
+smtp_password = "re_XXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# ── Grafana Cloud (optional — free tier at grafana.com) ──────────────────────
+# Remote_write URL + API key from: grafana.com → My Account → Grafana Cloud Stack
+grafana_cloud_prometheus_url = "" # e.g. https://prometheus-prod-01-eu-west-0.grafana.net/api/prom/push
+grafana_cloud_api_key        = "" # Grafana Cloud API key with MetricsPublisher role

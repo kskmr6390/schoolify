@@ -124,14 +124,52 @@ def get_store(tenant_id: str) -> TenantVectorStore:
     return _stores[tenant_id]
 
 
+class LocalOllamaClient:
+    def __init__(self, base_url: str, default_model: str):
+        self.base_url = base_url.rstrip("/")
+        self.default_model = default_model
+
+    async def generate(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        model: Optional[str] = None,
+    ) -> str:
+        import httpx
+        payload = {
+            "model": model or self.default_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                *messages,
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.2,
+            "stream": False,
+        }
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(f"{self.base_url}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        return data.get("choices", [])[0].get("message", {}).get("content", "")
+
+
 class RAGPipeline:
-    """Full RAG pipeline: retrieve context → augment prompt → generate."""
+    """Full RAG pipeline: retrieve context -> augment -> generate."""
 
     def __init__(self):
-        # Using Anthropic Claude as the LLM
-        import anthropic
-        self.client = anthropic.AsyncAnthropic()
-        self.model = "claude-opus-4-6"
+        from ..shared.config import settings
+        if settings.LLM_TYPE.lower() == "local":
+            self.client = LocalOllamaClient(settings.LOCAL_LLM_BASE_URL, settings.LOCAL_LLM_MODEL)
+            self.default_model = settings.LOCAL_LLM_MODEL
+            self.is_local = True
+        else:
+            import anthropic
+            self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+            self.default_model = "claude-opus-4-6"
+            self.is_local = False
 
     async def index_school_data(
         self,
@@ -197,6 +235,7 @@ class RAGPipeline:
         context: List[Dict],
         conversation_history: List[Dict],
         tenant_name: str = "the school",
+        model: Optional[str] = None,
     ) -> Tuple[str, List[Dict]]:
         """
         Generate an AI response using Claude with retrieved context.
@@ -228,14 +267,16 @@ Guidelines:
             messages.append({"role": msg["role"], "content": msg["content"]})
         messages.append({"role": "user", "content": query})
 
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=messages,
-        )
-
-        response_text = response.content[0].text
+        if self.is_local:
+            response_text = await self.client.generate(system_prompt, messages, max_tokens=1024, model=model or self.default_model)
+        else:
+            response = await self.client.messages.create(
+                model=self.default_model,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+            )
+            response_text = response.content[0].text
         sources = [{"source_type": ctx.get("source_type"), "source_id": ctx.get("source_id")}
                    for ctx in context]
         return response_text, sources
@@ -246,11 +287,12 @@ Guidelines:
         query: str,
         conversation_history: List[Dict] = None,
         tenant_name: str = "School",
+        model: Optional[str] = None,
     ) -> Dict:
         """Full RAG pipeline: retrieve → augment → generate."""
         context = await self.retrieve_context(tenant_id, query)
         response, sources = await self.generate_response(
-            query, context, conversation_history or [], tenant_name
+            query, context, conversation_history or [], tenant_name, model=model
         )
         return {
             "response": response,

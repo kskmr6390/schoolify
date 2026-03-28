@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS: str = "kafka:9092"
     KAFKA_CONSUMER_GROUP: str = "schoolify-group"
+    # Set to SASL_SSL for Upstash Kafka (managed) — leave PLAINTEXT for local Docker Kafka
+    KAFKA_SECURITY_PROTOCOL: str = "PLAINTEXT"
+    KAFKA_SASL_MECHANISM: str = "SCRAM-SHA-256"
+    KAFKA_SASL_USERNAME: str = ""
+    KAFKA_SASL_PASSWORD: str = ""
 
     # JWT
     ALGORITHM: str = "HS256"
@@ -63,7 +68,16 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_TENANT_PER_MINUTE: int = 1000
 
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "https://app.schoolify.com"]
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000", "https://app.schoolify.com"]
+
+    # AI / LLM
+    # AI_COPILOT_ENABLED=false disables the AI service entirely (saves ~90 MB RAM + Ollama)
+    AI_COPILOT_ENABLED: bool = True
+    # LLM_TYPE: "local" (Ollama) | "claude" (Anthropic API) | "disabled"
+    LLM_TYPE: str = "local"
+    ANTHROPIC_API_KEY: str = ""
+    LOCAL_LLM_BASE_URL: str = "http://localhost:11434"
+    LOCAL_LLM_MODEL: str = "tinyllama-1.1b"
 
     # Service URLs (for API Gateway)
     AUTH_SERVICE_URL: str = "http://auth-service:8001"

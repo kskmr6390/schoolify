@@ -255,13 +255,15 @@ function PersonnelGrid({ type }: { type: 'teachers' | 'staff' }) {
   const [entries, setEntries] = useState<Record<string, AttendanceStatus>>({})
   const [search, setSearch] = useState('')
 
-  const endpoint = type === 'teachers' ? '/api/v1/teachers' : '/api/v1/staff'
+  const endpoint = type === 'teachers'
+    ? '/api/v1/users/staff-list?role=teacher'
+    : '/api/v1/users/staff-list'
 
   const { data: personnel, isLoading } = useQuery({
     queryKey: [type, 'list'],
     queryFn: async () => {
       const res = await api.get(endpoint)
-      return (res as any)?.data?.items ?? []
+      return (res as any)?.data ?? []
     },
   })
 
@@ -285,7 +287,7 @@ function PersonnelGrid({ type }: { type: 'teachers' | 'staff' }) {
 
   const filtered = useMemo(() =>
     (personnel ?? []).filter((p: any) =>
-      `${p.first_name} ${p.last_name} ${p.employee_id ?? p.staff_code ?? ''}`.toLowerCase().includes(search.toLowerCase())
+      `${p.first_name} ${p.last_name} ${p.staff_profile?.employee_id ?? p.employee_id ?? ''}`.toLowerCase().includes(search.toLowerCase())
     ), [personnel, search])
 
   const total = personnel?.length ?? 0
@@ -369,10 +371,10 @@ function PersonnelGrid({ type }: { type: 'teachers' | 'staff' }) {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500 font-mono">
-                    {person.employee_id ?? person.staff_code ?? '—'}
+                    {person.staff_profile?.employee_id ?? person.employee_id ?? '—'}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500">
-                    {person.subject ?? person.department ?? '—'}
+                    {(person.staff_profile?.subject_expertise ?? []).join(', ') || person.staff_profile?.department || person.department || '—'}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5">

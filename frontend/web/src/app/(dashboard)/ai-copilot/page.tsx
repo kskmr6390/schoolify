@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { Bot, Loader2, Send, User } from 'lucide-react'
+import { useMutation } from '@tanstack/react-query'
+import { Bot, Cpu, Loader2, Send, User } from 'lucide-react'
 import api from '../../../lib/api'
 import { cn } from '../../../lib/utils'
 import { useSearchParams } from 'next/navigation'
+import { useAIStore } from '../../../store/aiStore'
+import { queryAI, type AIMessage } from '../../../lib/aiService'
 
 interface Message {
   id: string
@@ -22,18 +24,37 @@ const EXAMPLE_QUERIES = [
   "Which subjects need attention in Grade 9?",
 ]
 
+const PROVIDER_LABELS: Record<string, string> = {
+  openai:    'OpenAI',
+  anthropic: 'Anthropic',
+  google:    'Google Gemini',
+  mistral:   'Mistral',
+  groq:      'Groq',
+  cohere:    'Cohere',
+  local:     'Local LLM',
+}
+
 export default function AICopilotPage() {
   const searchParams = useSearchParams()
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState(searchParams.get('q') || '')
+  const { provider, localArch, localStatus, models } = useAIStore()
+
+  const [messages, setMessages]         = useState<Message[]>([])
+  const [conversation, setConversation] = useState<AIMessage[]>([])
+  const [input, setInput]               = useState(searchParams.get('q') || '')
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [frontendLoading, setFrontendLoading] = useState(false)
+  const [frontendError, setFrontendError]     = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  const isLocalProvider   = provider === 'local'
+  const useBackend        = !isLocalProvider   // non-local providers still go to backend for RAG
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const chatMutation = useMutation({
+  // ── Backend chat (Claude RAG) ─────────────────────────────────────────────
+  const backendMutation = useMutation({
     mutationFn: (message: string) =>
       api.post('/api/v1/copilot/chat', {
         message,
@@ -42,34 +63,60 @@ export default function AICopilotPage() {
     onSuccess: (data: any) => {
       const { conversation_id, response, sources } = data.data
       if (!conversationId) setConversationId(conversation_id)
-
-      setMessages((prev) => [
+      setMessages(prev => [
         ...prev,
-        {
-          id: Date.now().toString() + '-assistant',
-          role: 'assistant',
-          content: response,
-          sources,
-        },
+        { id: Date.now() + '-assistant', role: 'assistant', content: response, sources },
+      ])
+    },
+    onError: (err: any) => {
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now() + '-err', role: 'assistant', content: `Error: ${err.message}` },
       ])
     },
   })
 
+  // ── Local / frontend provider chat ───────────────────────────────────────
+  const runFrontendAI = async (userMessage: string) => {
+    setFrontendLoading(true)
+    setFrontendError(null)
+    const updatedConv: AIMessage[] = [...conversation, { role: 'user', content: userMessage }]
+    setConversation(updatedConv)
+    try {
+      const res = await queryAI(updatedConv)
+      const assistantMsg: AIMessage = { role: 'assistant', content: res.text }
+      setConversation(prev => [...prev, assistantMsg])
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now() + '-assistant', role: 'assistant', content: res.text },
+      ])
+    } catch (err: any) {
+      const errText = err.message ?? 'Unknown error'
+      setFrontendError(errText)
+      setMessages(prev => [
+        ...prev,
+        { id: Date.now() + '-err', role: 'assistant', content: `Error: ${errText}` },
+      ])
+    } finally {
+      setFrontendLoading(false)
+    }
+  }
+
+  const isPending = useBackend ? backendMutation.isPending : frontendLoading
+
   const handleSend = () => {
-    if (!input.trim() || chatMutation.isPending) return
+    if (!input.trim() || isPending) return
     const userMessage = input.trim()
     setInput('')
-
-    setMessages((prev) => [
+    setMessages(prev => [
       ...prev,
-      {
-        id: Date.now().toString(),
-        role: 'user',
-        content: userMessage,
-      },
+      { id: Date.now() + '-user', role: 'user', content: userMessage },
     ])
-
-    chatMutation.mutate(userMessage)
+    if (useBackend) {
+      backendMutation.mutate(userMessage)
+    } else {
+      runFrontendAI(userMessage)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -79,17 +126,31 @@ export default function AICopilotPage() {
     }
   }
 
+  // ── Provider badge ────────────────────────────────────────────────────────
+  const providerLabel = isLocalProvider
+    ? `Local LLM · ${localArch}`
+    : `Powered by ${PROVIDER_LABELS[provider] ?? provider}`
+
+  const providerReady = !isLocalProvider || localStatus === 'ready'
+
   return (
     <div className="flex flex-col h-[calc(100vh-6rem)]">
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
         <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center">
-          <Bot className="w-6 h-6 text-white" />
+          {isLocalProvider ? <Cpu className="w-6 h-6 text-white" /> : <Bot className="w-6 h-6 text-white" />}
         </div>
         <div>
           <h1 className="text-xl font-bold text-gray-900">AI Copilot</h1>
-          <p className="text-xs text-gray-500">Powered by Claude • Ask anything about your school data</p>
+          <p className="text-xs text-gray-500">{providerLabel} • Ask anything about your school data</p>
         </div>
+
+        {/* Local LLM not ready warning */}
+        {isLocalProvider && localStatus !== 'ready' && (
+          <span className="ml-auto text-xs bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-full">
+            Local model not trained — go to Settings → AI to train
+          </span>
+        )}
       </div>
 
       {/* Messages */}
@@ -97,13 +158,14 @@ export default function AICopilotPage() {
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-16 h-16 rounded-2xl bg-indigo-50 flex items-center justify-center mb-4">
-              <Bot size={28} className="text-indigo-600" />
+              {isLocalProvider
+                ? <Cpu size={28} className="text-indigo-600" />
+                : <Bot size={28} className="text-indigo-600" />}
             </div>
             <h3 className="text-lg font-semibold text-gray-800 mb-2">How can I help you today?</h3>
             <p className="text-sm text-gray-500 max-w-sm mb-6">
               Ask me about student performance, attendance patterns, fee collection, or any school data.
             </p>
-            {/* Example queries */}
             <div className="flex flex-wrap gap-2 justify-center max-w-lg">
               {EXAMPLE_QUERIES.map((q) => (
                 <button
@@ -120,14 +182,13 @@ export default function AICopilotPage() {
           messages.map((msg) => (
             <div
               key={msg.id}
-              className={cn(
-                "flex gap-3",
-                msg.role === 'user' ? "justify-end" : "justify-start"
-              )}
+              className={cn("flex gap-3", msg.role === 'user' ? "justify-end" : "justify-start")}
             >
               {msg.role === 'assistant' && (
                 <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Bot size={14} className="text-white" />
+                  {isLocalProvider
+                    ? <Cpu size={14} className="text-white" />
+                    : <Bot size={14} className="text-white" />}
                 </div>
               )}
               <div className={cn(
@@ -154,10 +215,10 @@ export default function AICopilotPage() {
           ))
         )}
 
-        {chatMutation.isPending && (
+        {isPending && (
           <div className="flex gap-3">
             <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center flex-shrink-0">
-              <Bot size={14} className="text-white" />
+              {isLocalProvider ? <Cpu size={14} className="text-white" /> : <Bot size={14} className="text-white" />}
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
               <div className="flex items-center gap-1.5">
@@ -179,21 +240,25 @@ export default function AICopilotPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about your school data... (Enter to send)"
+            placeholder={
+              isLocalProvider && !providerReady
+                ? 'Train a local model in Settings first…'
+                : 'Ask about your school data… (Enter to send)'
+            }
+            disabled={isLocalProvider && !providerReady}
             rows={1}
-            className="w-full px-4 py-3 pr-12 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none bg-white shadow-sm"
+            className="w-full px-4 py-3 pr-12 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none bg-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ maxHeight: '120px', overflowY: 'auto' }}
           />
         </div>
         <button
           onClick={handleSend}
-          disabled={!input.trim() || chatMutation.isPending}
+          disabled={!input.trim() || isPending || (isLocalProvider && !providerReady)}
           className="flex-shrink-0 w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
         >
-          {chatMutation.isPending
+          {isPending
             ? <Loader2 size={16} className="animate-spin" />
-            : <Send size={16} />
-          }
+            : <Send size={16} />}
         </button>
       </div>
     </div>

@@ -212,6 +212,111 @@ async def get_low_attendance_students(
     return StandardResponse.ok(alerts)
 
 
+@router.get("/summary", response_model=StandardResponse)
+async def get_attendance_summary(
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
+    class_id: Optional[UUID] = Query(None),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Monthly calendar summary: returns a dict keyed by date string,
+    each value containing {present, absent, late, excused, total}.
+    """
+    from uuid import UUID as UUIDT
+    from sqlalchemy import text
+
+    tid = UUIDT(current_user.tenant_id)
+    if not from_date:
+        from_date = date.today().replace(day=1)
+    if not to_date:
+        to_date = date.today()
+
+    params: dict = {"tid": tid, "from_date": from_date, "to_date": to_date}
+    class_filter = ""
+    if class_id:
+        class_filter = "AND ar.class_id = :class_id"
+        params["class_id"] = class_id
+
+    rows = (await db.execute(text(f"""
+        SELECT
+          ar.date,
+          COUNT(ae.id) FILTER (WHERE ae.status='PRESENT') AS present,
+          COUNT(ae.id) FILTER (WHERE ae.status='ABSENT')  AS absent,
+          COUNT(ae.id) FILTER (WHERE ae.status='LATE')    AS late,
+          COUNT(ae.id) FILTER (WHERE ae.status='EXCUSED') AS excused,
+          COUNT(ae.id) AS total
+        FROM attendance_records ar
+        JOIN attendance_entries ae ON ae.record_id = ar.id
+        WHERE ar.tenant_id = :tid
+          AND ar.date BETWEEN :from_date AND :to_date
+          {class_filter}
+        GROUP BY ar.date
+        ORDER BY ar.date
+    """), params)).fetchall()
+
+    result = {}
+    for r in rows:
+        result[str(r[0])] = {
+            "present": int(r[1]),
+            "absent": int(r[2]),
+            "late": int(r[3]),
+            "excused": int(r[4]),
+            "total": int(r[5]),
+        }
+    return StandardResponse(success=True, data=result)
+
+
+@router.get("", response_model=StandardResponse)
+async def list_attendance(
+    date_: Optional[date] = Query(None, alias="date"),
+    class_id: Optional[UUID] = Query(None),
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List attendance entries for a specific date and optionally a class."""
+    from uuid import UUID as UUIDT
+    from sqlalchemy import text
+
+    tid = UUIDT(current_user.tenant_id)
+    if not date_:
+        date_ = date.today()
+
+    params: dict = {"tid": tid, "date": date_}
+    class_filter = ""
+    if class_id:
+        class_filter = "AND ar.class_id = :class_id"
+        params["class_id"] = class_id
+
+    rows = (await db.execute(text(f"""
+        SELECT
+          ae.student_id,
+          LOWER(ae.status::text) AS status,
+          s.first_name,
+          s.last_name,
+          s.student_code
+        FROM attendance_records ar
+        JOIN attendance_entries ae ON ae.record_id = ar.id
+        JOIN students s ON s.id = ae.student_id
+        WHERE ar.tenant_id = :tid
+          AND ar.date = :date
+          {class_filter}
+        ORDER BY s.first_name, s.last_name
+    """), params)).fetchall()
+
+    result = [
+        {
+            "student_id": str(r[0]),
+            "status": r[1],
+            "name": f"{r[2]} {r[3]}",
+            "student_code": r[4],
+        }
+        for r in rows
+    ]
+    return StandardResponse(success=True, data=result)
+
+
 async def _check_low_attendance(class_id: UUID, tenant_id, db: AsyncSession):
     """Background check after marking - publish alert events for low-attendance students."""
     # Simplified version - full implementation would check all students in class

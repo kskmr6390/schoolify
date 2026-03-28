@@ -193,23 +193,17 @@ async def list_staff(
     if role:
         role_filter = f"AND LOWER(u.role::text) = '{role.lower()}'"
 
-    staff_type_filter = ""
-    if staff_type:
-        staff_type_filter = f"AND sp.staff_type = '{staff_type}'"
-
     rows = (await db.execute(text(f"""
         SELECT
           u.id, u.first_name, u.last_name, u.email, u.status::text AS status,
           LOWER(u.role::text) AS role, u.created_at,
           sp.id AS sp_id, sp.employee_id, sp.department, sp.designation,
-          sp.date_of_joining, sp.qualifications, sp.subject_expertise,
-          sp.salary, sp.salary_type, sp.staff_type, sp.leave_balance
+          sp.date_of_joining, sp.qualifications, sp.subject_expertise
         FROM users u
         LEFT JOIN staff_profiles sp ON sp.user_id = u.id AND sp.tenant_id = :tid
         WHERE u.tenant_id = :tid
           AND LOWER(u.role::text) IN ('teacher', 'admin')
           {role_filter}
-          {staff_type_filter}
         ORDER BY u.first_name, u.last_name
     """), {"tid": tid})).fetchall()
 
@@ -231,10 +225,6 @@ async def list_staff(
                 "date_of_joining": str(r[11]) if r[11] else None,
                 "qualifications": r[12] or [],
                 "subject_expertise": r[13] or [],
-                "salary": r[14],
-                "salary_type": r[15] or "monthly",
-                "staff_type": r[16] or "teaching",
-                "leave_balance": r[17] if r[17] is not None else 12,
             } if r[7] else None,
         })
 
