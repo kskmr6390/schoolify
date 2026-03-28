@@ -114,6 +114,7 @@ jobs:
           - api-gateway
           - auth-service
           - tenant-service
+          - user-service
           - student-service
           - attendance-service
           - fee-service
