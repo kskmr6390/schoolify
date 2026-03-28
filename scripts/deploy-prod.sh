@@ -47,7 +47,7 @@ SCP="scp -o StrictHostKeyChecking=no"
 
 # ── Sync docker-compose.prod.yml ───────────────────────────────────────────────
 echo "→ Syncing docker-compose.prod.yml..."
-$SSH "mkdir -p /opt/schoolify/faiss_indexes"
+$SSH "mkdir -p /opt/schoolify/faiss_indexes && rm -rf /opt/schoolify/prometheus.prod.yml"
 $SCP "$REPO_ROOT/docker/docker-compose.prod.yml" "root@$VPS_IP:$COMPOSE_FILE"
 $SCP "$REPO_ROOT/docker/prometheus.prod.yml" "root@$VPS_IP:/opt/schoolify/prometheus.prod.yml"
 

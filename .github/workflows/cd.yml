@@ -40,7 +40,10 @@ jobs:
       # ── Copy config files to VPS ─────────────────────────────────────────────
       - name: Sync config files
         run: |
-          ssh root@${{ secrets.VPS_HOST }} "mkdir -p /opt/schoolify/faiss_indexes"
+          ssh root@${{ secrets.VPS_HOST }} "
+            mkdir -p /opt/schoolify/faiss_indexes
+            rm -rf /opt/schoolify/prometheus.prod.yml
+          "
           scp docker/docker-compose.prod.yml root@${{ secrets.VPS_HOST }}:/opt/schoolify/docker-compose.prod.yml
           scp docker/prometheus.prod.yml root@${{ secrets.VPS_HOST }}:/opt/schoolify/prometheus.prod.yml
 
