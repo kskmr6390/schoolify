@@ -189,7 +189,7 @@ function RoleModal({
         })
       }
     } else {
-      const r = create(tenantId, { name: name.trim(), description: description.trim(), color, permissions: perms })
+      const r = create(tenantId, { name: name.trim(), description: description.trim(), color, permissions: perms, tenantId })
       if (user) {
         logStore.add({
           tenantId, userId: user.id,
