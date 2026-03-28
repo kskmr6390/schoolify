@@ -20,7 +20,7 @@ from services.user_service.models import UserProfile, StaffProfile
 # Student service models
 from services.student_service.models import (
     AcademicYear, Class, Subject, ClassSubject, TimetableSlot,
-    Student, Parent, StudentDocument,
+    Student, Parent, StudentDocument, Post, PostLike,
 )
 
 # Attendance service models
@@ -35,10 +35,14 @@ from services.assignment_service.models import (
 )
 
 # Notification service models
-from services.notification_service.models import Notification, NotificationPreference, DeviceToken
+from services.notification_service.models import (
+    NotificationTemplate, Notification, NotificationPreference, DeviceToken,
+)
 
 # AI Copilot service models
-from services.ai_copilot_service.models import Conversation, Message
+from services.ai_copilot_service.models import (
+    CopilotConversation, CopilotMessage, TrainingJob, LLMUsageLog, TrainingSchedule,
+)
 
 # Analytics service models
 from services.analytics_service.models import (
