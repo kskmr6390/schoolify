@@ -1,0 +1,156 @@
+# Schoolify — Production Docker Compose (Tier 1: Single VPS)
+#
+# What runs HERE (on the Hetzner cx32 VPS):
+#   All 11 FastAPI microservices
+#   Prometheus (lightweight — ships metrics to Grafana Cloud)
+#
+# What runs EXTERNALLY (managed services — zero ops):
+#   Database : Neon Postgres serverless
+#   Cache    : Upstash Redis (TLS)
+#   Events   : Upstash Kafka (SASL_SSL)
+#   Storage  : Backblaze B2 (S3-compatible)
+#   Frontend : Vercel (Next.js)
+#   TLS/Proxy: Caddy (runs on host, not in Docker)
+#
+# Images pulled from: ghcr.io/<GITHUB_REPO>/<service>:<IMAGE_TAG>
+# Built by GitHub Actions CI and pushed to GHCR on every merge to main.
+#
+# Env vars loaded from /opt/schoolify/.env (written by Terraform cloud-init)
+
+networks:
+  schoolify-net:
+    driver: bridge
+
+services:
+
+  # ── API Gateway — the only service exposed externally ──────────────────────
+  # Caddy on the host proxies:  https://api.<domain> → localhost:8000
+  # Port is bound to 127.0.0.1 only — not reachable from the internet directly.
+  api-gateway:
+    image: ghcr.io/${GITHUB_REPO}/api-gateway:${IMAGE_TAG:-latest}
+    container_name: schoolify-api-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    environment:
+      AUTH_SERVICE_URL:         http://auth-service:8001
+      TENANT_SERVICE_URL:       http://tenant-service:8002
+      USER_SERVICE_URL:         http://user-service:8003
+      STUDENT_SERVICE_URL:      http://student-service:8004
+      ATTENDANCE_SERVICE_URL:   http://attendance-service:8005
+      FEE_SERVICE_URL:          http://fee-service:8006
+      NOTIFICATION_SERVICE_URL: http://notification-service:8007
+      ASSIGNMENT_SERVICE_URL:   http://assignment-service:8008
+      ANALYTICS_SERVICE_URL:    http://analytics-service:8009
+      AI_COPILOT_SERVICE_URL:   http://ai-copilot-service:8010
+    networks:
+      - schoolify-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ── Internal microservices (not exposed externally) ────────────────────────
+
+  auth-service:
+    image: ghcr.io/${GITHUB_REPO}/auth-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-auth
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  tenant-service:
+    image: ghcr.io/${GITHUB_REPO}/tenant-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-tenant
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  user-service:
+    image: ghcr.io/${GITHUB_REPO}/user-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-user
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  student-service:
+    image: ghcr.io/${GITHUB_REPO}/student-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-student
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  attendance-service:
+    image: ghcr.io/${GITHUB_REPO}/attendance-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-attendance
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  fee-service:
+    image: ghcr.io/${GITHUB_REPO}/fee-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-fee
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  notification-service:
+    image: ghcr.io/${GITHUB_REPO}/notification-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-notification
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  assignment-service:
+    image: ghcr.io/${GITHUB_REPO}/assignment-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-assignment
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  analytics-service:
+    image: ghcr.io/${GITHUB_REPO}/analytics-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-analytics
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - schoolify-net
+
+  # ── AI Copilot (Anthropic Claude API — no local ollama needed on this VPS) ─
+  ai-copilot-service:
+    image: ghcr.io/${GITHUB_REPO}/ai-copilot-service:${IMAGE_TAG:-latest}
+    container_name: schoolify-ai-copilot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LLM_TYPE:        anthropic          # use Claude API, not local ollama
+      FAISS_STORE_DIR: /app/faiss_indexes
+    volumes:
+      - /opt/schoolify/faiss_indexes:/app/faiss_indexes
+    networks:
+      - schoolify-net
+
+  # ── Prometheus (lightweight — 2-day local retention, ships to Grafana Cloud) ─
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: schoolify-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d   # Grafana Cloud keeps long-term history
+      - --web.listen-address=127.0.0.1:9090 # internal only
+    volumes:
+      - ./prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - schoolify-net

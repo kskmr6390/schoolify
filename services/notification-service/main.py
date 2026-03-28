@@ -13,7 +13,10 @@ from .router import router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
-    await start_consumer()
+    try:
+        await start_consumer()
+    except Exception as e:
+        print(f"Warning: Kafka consumer unavailable at startup: {e}. Notifications will not be sent.")
     yield
     await stop_consumer()
 

@@ -13,7 +13,10 @@ from .router import router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
-    await event_producer.start()
+    try:
+        await event_producer.start()
+    except Exception as e:
+        print(f"Warning: Kafka producer unavailable at startup: {e}. Service will run without event publishing.")
     yield
     await event_producer.stop()
 

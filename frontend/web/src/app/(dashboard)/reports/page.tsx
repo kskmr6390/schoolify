@@ -77,8 +77,12 @@ function ChartCard({ title, icon: Icon, iconColor, children, colSpan }: {
   )
 }
 
-const TABS = ['Overview', 'Attendance', 'Academics', 'Fees', 'HR & Staff', 'Students', 'Performance'] as const
+const TABS = ['Overview', 'Attendance', 'Academics', 'Fees', 'HR & Staff', 'Students', 'Performance', 'AI & LLM'] as const
 type Tab = typeof TABS[number]
+
+const LLM_PROVIDER_COLORS: Record<string, string> = {
+  local: '#4F46E5', claude: '#ef4444', google: '#f59e0b', openai: '#10b981',
+}
 
 export default function ReportsPage() {
   const [tab, setTab] = useState<Tab>('Overview')
@@ -87,6 +91,18 @@ export default function ReportsPage() {
     queryKey: ['reports', 'school-analytics'],
     queryFn: () => api.get('/api/v1/reports/school-analytics') as any,
   })
+
+  const { data: llmRaw, isLoading: llmLoading } = useQuery({
+    queryKey: ['reports', 'llm-analytics'],
+    queryFn: () => api.get('/api/v1/llm-analytics/usage?days=30') as any,
+    enabled: tab === 'AI & LLM',
+    staleTime: 5 * 60 * 1000,
+  })
+  const llm = (llmRaw as any)?.data || {}
+  const llmSum = llm.summary || {}
+  const llmProviders: any[] = llm.provider_breakdown || []
+  const llmTrend: any[] = llm.daily_trend || []
+  const llmCostComp: any[] = llm.cost_comparison || []
 
   const d = (raw as any)?.data || {}
   const ov = d.overview || {}
@@ -986,6 +1002,161 @@ export default function ReportsPage() {
                   ))}
                 </div>
               </ChartCard>
+            </div>
+          )}
+
+          {/* ── AI & LLM TAB ── */}
+          {tab === 'AI & LLM' && (
+            <div className="space-y-6">
+              {/* KPI row */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                {[
+                  { icon: Zap,          label: 'Total Queries',     value: llmLoading ? '…' : (llmSum.total_queries ?? 0),      color: 'indigo' },
+                  { icon: ShieldCheck,  label: 'Local (Free)',       value: llmLoading ? '…' : `${llmSum.local_pct ?? 0}%`,       color: 'emerald' },
+                  { icon: IndianRupee,  label: 'Cloud Cost (USD)',   value: llmLoading ? '…' : `$${(llmSum.actual_cost_usd ?? 0).toFixed(2)}`, color: 'amber' },
+                  { icon: TrendingDown, label: 'If All Claude',      value: llmLoading ? '…' : `$${(llmSum.if_all_claude_usd ?? 0).toFixed(2)}`, color: 'red' },
+                  { icon: TrendingDown, label: 'If All Gemini',      value: llmLoading ? '…' : `$${(llmSum.if_all_gemini_usd ?? 0).toFixed(2)}`, color: 'violet' },
+                  { icon: CheckCircle2, label: 'Savings vs Claude',  value: llmLoading ? '…' : `$${(llmSum.savings_usd ?? 0).toFixed(2)}`, color: 'green' },
+                ].map(k => (
+                  <KpiCard key={k.label} icon={k.icon} label={k.label} value={k.value} color={k.color} />
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Daily usage trend */}
+                <ChartCard title="Daily Query Volume — Last 30 Days" icon={Activity} iconColor="text-indigo-500" colSpan>
+                  {!llmTrend.length ? <EmptyChart message="No LLM usage data yet." /> : (
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={llmTrend}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                        <XAxis dataKey="day" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} interval={4} />
+                        <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
+                        <Tooltip />
+                        <Legend />
+                        {Object.keys(LLM_PROVIDER_COLORS).filter(p => llmTrend.some(d => (d[p] ?? 0) > 0)).map(p => (
+                          <Bar key={p} dataKey={p} stackId="a" fill={LLM_PROVIDER_COLORS[p]}
+                            name={p === 'local' ? 'Local (Ollama)' : p === 'claude' ? 'Claude' : p === 'google' ? 'Google Gemini' : 'OpenAI'} />
+                        ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </ChartCard>
+
+                {/* Provider distribution pie */}
+                <ChartCard title="Provider Distribution" icon={Zap} iconColor="text-violet-500">
+                  {!llmProviders.length ? <EmptyChart /> : (
+                    <div className="flex items-center gap-6">
+                      <ResponsiveContainer width="50%" height={200}>
+                        <PieChart>
+                          <Pie data={llmProviders} dataKey="queries" nameKey="label" cx="50%" cy="50%" outerRadius={80} innerRadius={45}>
+                            {llmProviders.map((p: any) => (
+                              <Cell key={p.provider} fill={LLM_PROVIDER_COLORS[p.provider] || '#9ca3af'} />
+                            ))}
+                          </Pie>
+                          <Tooltip formatter={(v: any, n: any) => [`${v} queries`, n]} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="space-y-3 flex-1">
+                        {llmProviders.map((p: any) => (
+                          <div key={p.provider}>
+                            <div className="flex items-center justify-between text-xs mb-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-2.5 h-2.5 rounded-full" style={{ background: LLM_PROVIDER_COLORS[p.provider] || '#9ca3af' }} />
+                                <span className="text-gray-700 font-medium">{p.label}</span>
+                              </div>
+                              <span className="text-gray-500">{p.pct}%</span>
+                            </div>
+                            <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                              <div className="h-full rounded-full" style={{ width: `${p.pct}%`, background: LLM_PROVIDER_COLORS[p.provider] || '#9ca3af' }} />
+                            </div>
+                            <p className="text-xs text-gray-400 mt-0.5">{p.queries} queries · ${p.cost_usd.toFixed(4)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </ChartCard>
+
+                {/* Cost comparison */}
+                <ChartCard title="Cost Comparison — Actual vs Cloud Providers" icon={IndianRupee} iconColor="text-amber-500">
+                  {!llmCostComp.length ? <EmptyChart /> : (
+                    <div className="space-y-4">
+                      {llmCostComp.map((c: any) => (
+                        <div key={c.label}>
+                          <div className="flex justify-between text-sm mb-1">
+                            <span className="text-gray-700">{c.label}</span>
+                            <span className="font-bold text-gray-900">${c.cost.toFixed(4)}</span>
+                          </div>
+                          <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all"
+                              style={{
+                                width: `${Math.min(c.cost / Math.max(...llmCostComp.map((x: any) => x.cost), 0.001) * 100, 100)}%`,
+                                background: c.color
+                              }} />
+                          </div>
+                        </div>
+                      ))}
+                      <div className="mt-4 p-3 bg-emerald-50 rounded-xl border border-emerald-200">
+                        <p className="text-sm font-semibold text-emerald-800">
+                          💰 Saved <span className="text-lg">${(llmSum.savings_usd ?? 0).toFixed(2)}</span> vs all-Claude usage
+                        </p>
+                        <p className="text-xs text-emerald-600 mt-0.5">
+                          {llmSum.savings_pct ?? 0}% cost reduction · {llmSum.local_queries ?? 0} queries ran free on local Ollama
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </ChartCard>
+
+                {/* Pricing reference */}
+                <ChartCard title="LLM Pricing Reference (per 1K tokens)" icon={BookOpen} iconColor="text-sky-500">
+                  <div className="space-y-3">
+                    {[
+                      { name: 'Local (Ollama)', model: 'tinyllama-1.1b', input: 0, output: 0, color: '#4F46E5', badge: 'FREE' },
+                      { name: 'Claude Sonnet 3.5', model: 'claude-3-5-sonnet', input: 0.003, output: 0.015, color: '#ef4444', badge: 'CLOUD' },
+                      { name: 'Gemini 1.5 Flash', model: 'gemini-1.5-flash', input: 0.000075, output: 0.0003, color: '#f59e0b', badge: 'CLOUD' },
+                      { name: 'GPT-4o', model: 'gpt-4o', input: 0.0025, output: 0.010, color: '#10b981', badge: 'CLOUD' },
+                    ].map(p => (
+                      <div key={p.name} className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-lg">
+                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: p.color }} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800">{p.name}</p>
+                          <p className="text-xs text-gray-400">{p.model}</p>
+                        </div>
+                        <div className="text-right">
+                          {p.input === 0 ? (
+                            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">FREE</span>
+                          ) : (
+                            <div>
+                              <p className="text-xs text-gray-600">In: ${p.input}/1K</p>
+                              <p className="text-xs text-gray-600">Out: ${p.output}/1K</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ChartCard>
+
+                {/* Tokens summary */}
+                <ChartCard title="Token Usage Summary" icon={BarChart3} iconColor="text-purple-500">
+                  <div className="space-y-4">
+                    {[
+                      { label: 'Total Tokens Processed', value: (llmSum.total_tokens ?? 0).toLocaleString() },
+                      { label: 'Total Queries', value: (llmSum.total_queries ?? 0).toLocaleString() },
+                      { label: 'Local Queries (free)', value: (llmSum.local_queries ?? 0).toLocaleString() },
+                      { label: 'Cloud Queries (paid)', value: (llmSum.cloud_queries ?? 0).toLocaleString() },
+                      { label: 'Actual Cloud Cost', value: `$${(llmSum.actual_cost_usd ?? 0).toFixed(4)}` },
+                      { label: 'Savings vs All-Claude', value: `$${(llmSum.savings_usd ?? 0).toFixed(2)} (${llmSum.savings_pct ?? 0}%)` },
+                    ].map(item => (
+                      <div key={item.label} className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">{item.label}</span>
+                        <span className="text-sm font-semibold text-gray-900">{item.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </ChartCard>
+              </div>
             </div>
           )}
         </>

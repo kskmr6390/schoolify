@@ -96,12 +96,12 @@ wait_healthy() {
 # ── Start infrastructure only ────────────────────────────────────────────────
 start_infra() {
   log "Starting infrastructure services..."
-  $COMPOSE up -d postgres redis zookeeper kafka minio mailhog
+  $COMPOSE up -d postgres redis kafka minio mailhog
 
   log "Waiting for infrastructure to be ready..."
   wait_container_healthy "PostgreSQL"  schoolify-postgres  60
   wait_container_healthy "Redis"       schoolify-redis     30
-  wait_container_healthy "Kafka"       schoolify-kafka     120
+  wait_container_healthy "Kafka"       schoolify-kafka     180
   wait_healthy           "MailHog UI"  "http://localhost:8025" 30
 
   log "Infrastructure ready."
@@ -119,6 +119,13 @@ run_migrations() {
 
 # ── Start all app services ────────────────────────────────────────────────────
 start_services() {
+  # Stop native Ollama if running — Docker Ollama uses port 11434 (avoids Metal GPU crash on macOS 26+)
+  if pgrep -f "ollama serve" &>/dev/null || pgrep -f "ollama runner" &>/dev/null; then
+    warn "Stopping native Ollama (using Docker Ollama instead to avoid Metal GPU issues)..."
+    pkill -f "ollama" 2>/dev/null || true
+    sleep 1
+  fi
+
   log "Starting application services..."
   $COMPOSE up -d \
     api-gateway \
@@ -131,7 +138,10 @@ start_services() {
     notification-service \
     assignment-service \
     analytics-service \
-    ai-copilot-service
+    ollama \
+    ai-copilot-service \
+    web \
+    nginx
 
   log "Waiting for API Gateway..."
   wait_container_healthy "API Gateway" schoolify-api-gateway 120

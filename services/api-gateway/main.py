@@ -59,6 +59,8 @@ ROUTE_MAP = {
     "/api/v1/analytics":     "analytics",
     "/api/v1/dashboard":     "analytics",
     "/api/v1/reports":       "analytics",
+    "/api/v1/compliance":    "analytics",
+    "/api/v1/llm-analytics": "analytics",
     "/api/v1/copilot":       "ai-copilot",
     "/api/v1/feed":          "student",
     "/api/v1/upload":        "student",
