@@ -7,11 +7,11 @@ on:
     branches: [master]
     types: [completed]
 
-  # Manual trigger with optional migration step
+  # Manual trigger with optional fixture loading
   workflow_dispatch:
     inputs:
-      migrate:
-        description: 'Run DB migrations after deploy?'
+      load_fixtures:
+        description: 'Seed fixture data after deploy? (analytics + sbm tenants)'
         required: false
         default: 'false'
         type: boolean
@@ -37,11 +37,12 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
-      # ── Copy docker-compose.prod.yml to VPS ─────────────────────────────────
-      - name: Sync docker-compose.prod.yml
+      # ── Copy config files to VPS ─────────────────────────────────────────────
+      - name: Sync config files
         run: |
           ssh root@${{ secrets.VPS_HOST }} "mkdir -p /opt/schoolify/faiss_indexes"
           scp docker/docker-compose.prod.yml root@${{ secrets.VPS_HOST }}:/opt/schoolify/docker-compose.prod.yml
+          scp docker/prometheus.prod.yml root@${{ secrets.VPS_HOST }}:/opt/schoolify/prometheus.prod.yml
 
       # ── GHCR login on VPS ────────────────────────────────────────────────────
       - name: Login to GHCR on VPS
@@ -60,12 +61,34 @@ jobs:
             docker image prune -f
           EOF
 
-      # ── Run DB migrations (optional) ────────────────────────────────────────
+      # ── Run DB migrations (always) ───────────────────────────────────────────
       - name: Run DB migrations
-        if: github.event.inputs.migrate == 'true'
         run: |
           ssh root@${{ secrets.VPS_HOST }} \
             "docker exec schoolify-api-gateway python -m alembic upgrade head"
+
+      # ── Load fixtures (optional — workflow_dispatch only) ────────────────────
+      - name: Copy seed scripts to VPS
+        if: github.event.inputs.load_fixtures == 'true'
+        run: |
+          ssh root@${{ secrets.VPS_HOST }} "mkdir -p /opt/schoolify/scripts"
+          scp scripts/seed_analytics.py root@${{ secrets.VPS_HOST }}:/opt/schoolify/scripts/seed_analytics.py
+          scp scripts/seed_sbm.py       root@${{ secrets.VPS_HOST }}:/opt/schoolify/scripts/seed_sbm.py
+
+      - name: Load fixtures
+        if: github.event.inputs.load_fixtures == 'true'
+        run: |
+          ssh root@${{ secrets.VPS_HOST }} bash -s <<'EOF'
+            set -e
+            source /opt/schoolify/.env
+            cd /opt/schoolify
+            pip3 install --quiet psycopg2-binary bcrypt 2>/dev/null || true
+            echo "→ Seeding analytics data..."
+            DATABASE_URL="$DATABASE_URL" python3 scripts/seed_analytics.py
+            echo "→ Seeding SBM fixtures..."
+            DATABASE_URL="$DATABASE_URL" python3 scripts/seed_sbm.py
+            echo "✓ Fixtures loaded"
+          EOF
 
       # ── Health check ────────────────────────────────────────────────────────
       - name: Health check
