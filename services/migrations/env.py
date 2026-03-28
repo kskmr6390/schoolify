@@ -61,7 +61,14 @@ target_metadata = Base.metadata
 
 
 def get_url():
-    return settings.DATABASE_URL.replace("+asyncpg", "")  # Use sync driver for migrations
+    return settings.DATABASE_URL.replace("+asyncpg", "")  # sync driver for offline mode
+
+
+def get_async_url():
+    url = settings.DATABASE_URL
+    if "+asyncpg" not in url:
+        url = url.replace("postgresql://", "postgresql+asyncpg://")
+    return url
 
 
 def run_migrations_offline() -> None:
@@ -91,7 +98,7 @@ def do_run_migrations(connection):
 
 async def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_url()
+    configuration["sqlalchemy.url"] = get_async_url()
     connectable = async_engine_from_config(
         configuration,
         prefix="sqlalchemy.",
