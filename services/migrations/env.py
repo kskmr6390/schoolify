@@ -97,13 +97,8 @@ def do_run_migrations(connection):
 
 
 async def run_migrations_online() -> None:
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_async_url()
-    connectable = async_engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    from sqlalchemy.ext.asyncio import create_async_engine
+    connectable = create_async_engine(get_async_url(), poolclass=pool.NullPool)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
