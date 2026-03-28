@@ -67,8 +67,14 @@ jobs:
       # ── Run DB migrations (always) ───────────────────────────────────────────
       - name: Run DB migrations
         run: |
-          ssh root@${{ secrets.VPS_HOST }} \
-            "docker exec schoolify-api-gateway python -m alembic upgrade head"
+          ssh root@${{ secrets.VPS_HOST }} bash -s <<'EOF'
+            set -e
+            source /opt/schoolify/.env
+            docker run --rm \
+              -e DATABASE_URL="$DATABASE_URL" \
+              -e SECRET_KEY="${SECRET_KEY:-changeme}" \
+              ghcr.io/kskmr6390/schoolify/migrations:latest
+          EOF
 
       # ── Load fixtures (optional — workflow_dispatch only) ────────────────────
       - name: Copy seed scripts to VPS
