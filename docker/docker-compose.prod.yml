@@ -31,7 +31,7 @@ services:
     container_name: schoolify-api-gateway
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:8000"
+      - "0.0.0.0:8000:8000"
     env_file: .env
     environment:
       AUTH_SERVICE_URL:         http://auth-service:8001
