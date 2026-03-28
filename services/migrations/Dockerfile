@@ -24,6 +24,8 @@ COPY services/notification-service     /app/services/notification_service
 COPY services/ai-copilot-service       /app/services/ai_copilot_service
 COPY services/analytics-service        /app/services/analytics_service
 
-COPY services/migrations/alembic.ini   /app/alembic.ini
+COPY services/migrations/alembic.ini    /app/alembic.ini
+COPY services/migrations/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-CMD ["python", "-m", "alembic", "upgrade", "head"]
+CMD ["/app/entrypoint.sh"]
