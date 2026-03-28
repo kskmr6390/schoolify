@@ -22,7 +22,7 @@ resource "vercel_project" "schoolify" {
   }
 
   root_directory   = "frontend/web"
-  install_command  = "npm ci"
+  install_command  = "npm install --legacy-peer-deps"
   build_command    = "npm run build"
   output_directory = ".next"
 }
