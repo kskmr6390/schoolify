@@ -70,6 +70,7 @@ jobs:
           ssh root@${{ secrets.VPS_HOST }} bash -s <<'EOF'
             set -e
             source /opt/schoolify/.env
+            docker pull ghcr.io/kskmr6390/schoolify/migrations:latest
             docker run --rm \
               -e DATABASE_URL="$DATABASE_URL" \
               -e SECRET_KEY="${SECRET_KEY:-changeme}" \
