@@ -63,6 +63,8 @@ resource "hcloud_server" "schoolify" {
     smtp_user            = var.smtp_user
     smtp_password        = var.smtp_password
     github_repo          = var.github_repo
+    github_repo_owner    = local.github_org
+    ghcr_token           = var.ghcr_token
     grafana_prom_url     = var.grafana_cloud_prometheus_url
     grafana_api_key      = var.grafana_cloud_api_key
   })

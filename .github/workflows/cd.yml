@@ -43,6 +43,12 @@ jobs:
           ssh root@${{ secrets.VPS_HOST }} "mkdir -p /opt/schoolify/faiss_indexes"
           scp docker/docker-compose.prod.yml root@${{ secrets.VPS_HOST }}:/opt/schoolify/docker-compose.prod.yml
 
+      # ── GHCR login on VPS ────────────────────────────────────────────────────
+      - name: Login to GHCR on VPS
+        run: |
+          ssh root@${{ secrets.VPS_HOST }} \
+            "echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin"
+
       # ── Pull latest images & restart ────────────────────────────────────────
       - name: Pull & restart services
         run: |

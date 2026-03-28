@@ -50,6 +50,19 @@ echo "→ Syncing docker-compose.prod.yml..."
 $SSH "mkdir -p /opt/schoolify/faiss_indexes"
 $SCP "$REPO_ROOT/docker/docker-compose.prod.yml" "root@$VPS_IP:$COMPOSE_FILE"
 
+# ── GHCR login (needed for private packages) ──────────────────────────────────
+# Set GHCR_TOKEN env var locally, or store it in /opt/schoolify/.env on the VPS
+# as GHCR_TOKEN=<your-github-pat-with-read:packages-scope>
+if [ -n "${GHCR_TOKEN:-}" ]; then
+  echo "→ Logging in to GHCR..."
+  $SSH "echo '$GHCR_TOKEN' | docker login ghcr.io -u kskmr6390 --password-stdin"
+else
+  # Try to read token stored on the VPS itself
+  $SSH "grep -q GHCR_TOKEN /opt/schoolify/.env 2>/dev/null && \
+    source /opt/schoolify/.env && \
+    echo \"\$GHCR_TOKEN\" | docker login ghcr.io -u kskmr6390 --password-stdin" 2>/dev/null || true
+fi
+
 # ── Pull latest images ─────────────────────────────────────────────────────────
 echo "→ Pulling latest images..."
 $SSH "docker compose -f $COMPOSE_FILE pull"

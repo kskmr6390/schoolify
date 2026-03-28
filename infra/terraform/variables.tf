@@ -115,6 +115,13 @@ variable "github_repo" {
   type        = string
 }
 
+variable "ghcr_token" {
+  description = "GitHub PAT with read:packages scope — allows VPS to pull private GHCR images. Create at github.com → Settings → Developer settings → Personal access tokens"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 # ── App Secrets ───────────────────────────────────────────────────────────────
 
 variable "secret_key" {

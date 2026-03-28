@@ -24,6 +24,7 @@ write_files:
       # ── Deployment ──────────────────────────────────────────────
       GITHUB_REPO=${github_repo}
       IMAGE_TAG=latest
+      GHCR_TOKEN=${ghcr_token}
 
       # ── Database (Neon serverless Postgres) ─────────────────────
       DATABASE_URL=${database_url}
@@ -125,6 +126,8 @@ write_files:
       [Service]
       Type=oneshot
       WorkingDirectory=/opt/schoolify
+      EnvironmentFile=/opt/schoolify/.env
+      ExecStartPre=/bin/sh -c 'echo "$GHCR_TOKEN" | docker login ghcr.io -u ${github_repo_owner} --password-stdin'
       ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml pull
       ExecStartPost=/usr/bin/docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
