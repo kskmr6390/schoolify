@@ -76,6 +76,7 @@ PUBLIC_PATHS = {
     "/api/v1/auth/google",
     "/api/v1/tenants/by-slug",
     "/api/v1/tenants/by-domain",
+    "/api/v1/tenants/register",
 }
 
 

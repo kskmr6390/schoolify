@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -20,17 +20,24 @@ type LoginForm = z.infer<typeof loginSchema>
 
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [showPassword, setShowPassword] = useState(false)
   const { login, isLoading, error, clearError } = useAuthStore()
 
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: { tenantSlug: 'demo', rememberMe: false },
   })
+
+  useEffect(() => {
+    const school = searchParams.get('school')
+    if (school) setValue('tenantSlug', school)
+  }, [searchParams, setValue])
 
   const onSubmit = async (data: LoginForm) => {
     clearError()
@@ -188,9 +195,9 @@ export default function LoginPage() {
 
         <p className="text-center text-sm text-gray-500 mt-6">
           New school?{' '}
-          <a href="https://schoolify.com/register" className="text-indigo-600 hover:underline font-medium">
-            Contact us to get started
-          </a>
+          <Link href="/register" className="text-indigo-600 hover:underline font-medium">
+            Register for free
+          </Link>
         </p>
       </div>
     </div>

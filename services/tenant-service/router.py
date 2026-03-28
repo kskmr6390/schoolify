@@ -12,10 +12,52 @@ from ..shared.security import get_current_user, require_roles
 from .models import (DEFAULT_FEATURE_FLAGS, DEFAULT_SETTINGS, FeatureFlag,
                      Tenant, TenantSetting, TenantStatus)
 from .schemas import (CreateTenantRequest, FeatureFlagUpdate,
-                      OnboardTenantRequest, TenantBrandingResponse,
-                      TenantResponse, TenantSettingsUpdate, UpdateTenantRequest)
+                      OnboardTenantRequest, RegisterSchoolRequest, RegisterSchoolResponse,
+                      TenantBrandingResponse, TenantResponse, TenantSettingsUpdate,
+                      UpdateTenantRequest)
 
 router = APIRouter(prefix="/api/v1/tenants", tags=["Tenants"])
+
+
+@router.post("/register", response_model=StandardResponse[RegisterSchoolResponse], status_code=201)
+async def register_school(
+    body: RegisterSchoolRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public self-service school registration.
+    Step 1: creates the tenant.
+    Frontend follows up with POST /api/v1/auth/register to create the admin account.
+    """
+    # Validate slug uniqueness
+    existing = await db.execute(select(Tenant).where(Tenant.slug == body.school_code))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"School code '{body.school_code}' is already taken")
+
+    tenant = Tenant(
+        slug=body.school_code,
+        name=body.school_name,
+        email=body.school_email,
+        phone=body.school_phone,
+        status=TenantStatus.ACTIVE,
+    )
+    db.add(tenant)
+    await db.flush()
+
+    for key, value in DEFAULT_SETTINGS.items():
+        db.add(TenantSetting(tenant_id=tenant.id, key=key, value=value))
+
+    for flag_name, enabled in DEFAULT_FEATURE_FLAGS.items():
+        db.add(FeatureFlag(tenant_id=tenant.id, flag_name=flag_name, enabled=enabled))
+
+    await cache_set(f"tenant:slug:{tenant.slug}", {"id": str(tenant.id), "name": tenant.name}, ttl=3600)
+
+    return StandardResponse.ok(RegisterSchoolResponse(
+        tenant_id=tenant.id,
+        school_code=tenant.slug,
+        school_name=tenant.name,
+        message="School created. Complete registration by creating your admin account.",
+    ))
 
 
 @router.post("", response_model=StandardResponse[TenantResponse], status_code=201)

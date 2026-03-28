@@ -83,6 +83,30 @@ class TenantSettingsUpdate(BaseModel):
     settings: Dict[str, str]  # key -> value pairs
 
 
+class RegisterSchoolRequest(BaseModel):
+    """Public self-service school registration (step 1 — tenant only)."""
+    school_name: str = Field(min_length=2, max_length=255)
+    school_code: str = Field(min_length=3, max_length=100, pattern=r'^[a-z0-9-]+$',
+                             description="Unique URL-safe identifier, e.g. greenwood-high")
+    school_email: str = Field(description="Official school contact email")
+    school_phone: Optional[str] = None
+
+    @field_validator("school_code")
+    @classmethod
+    def validate_school_code(cls, v):
+        reserved = {"www", "api", "app", "admin", "mail", "static", "assets"}
+        if v in reserved:
+            raise ValueError(f"'{v}' is a reserved code")
+        return v.lower()
+
+
+class RegisterSchoolResponse(BaseModel):
+    tenant_id: UUID
+    school_code: str
+    school_name: str
+    message: str
+
+
 class TenantStatsResponse(BaseModel):
     tenant_id: UUID
     total_students: int
