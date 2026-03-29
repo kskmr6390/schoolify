@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 
 export const metadata: Metadata = {
   title: 'Schoolify - School Management System',
-  description: 'Multi-tenant School Management Platform',
+  description: 'AI-Powered School Management',
   icons: { icon: '/favicon.ico' },
 }
 

@@ -53,7 +53,7 @@ export default function LoginScreen() {
             <Ionicons name="school" size={36} color="white" />
           </View>
           <Text style={styles.appName}>Schoolify</Text>
-          <Text style={styles.tagline}>School Management Platform</Text>
+          <Text style={styles.tagline}>AI-Powered School Management</Text>
         </View>
 
         {/* Form */}

@@ -7,7 +7,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import Link from 'next/link'
 import { Eye, EyeOff, GraduationCap, Loader2, CheckCircle, ChevronRight, Building2, User } from 'lucide-react'
-import axios from 'axios'
+import api from '../../../lib/api'
+import { useAuthStore } from '../../../store/authStore'
 
 // ── Step 1: School details ───────────────────────────────────────────────────
 const schoolSchema = z.object({
@@ -43,10 +44,9 @@ const adminSchema = z.object({
 type SchoolForm = z.infer<typeof schoolSchema>
 type AdminForm = z.infer<typeof adminSchema>
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-
 export default function RegisterPage() {
   const router = useRouter()
+  const { login } = useAuthStore()
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -70,7 +70,7 @@ export default function RegisterPage() {
     setError('')
     setIsLoading(true)
     try {
-      await axios.post(`${API}/api/v1/tenants/register`, {
+      await api.post('/api/v1/tenants/register', {
         school_name: data.school_name,
         school_code: data.school_code,
         school_email: data.school_email,
@@ -79,8 +79,7 @@ export default function RegisterPage() {
       setSchoolCode(data.school_code)
       setStep(2)
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.response?.data?.message || 'Failed to register school'
-      setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      setError(err.message || 'Failed to register school')
     } finally {
       setIsLoading(false)
     }
@@ -90,7 +89,7 @@ export default function RegisterPage() {
     setError('')
     setIsLoading(true)
     try {
-      await axios.post(`${API}/api/v1/auth/register`, {
+      await api.post('/api/v1/auth/register', {
         first_name: data.first_name,
         last_name: data.last_name,
         email: data.email,
@@ -98,9 +97,11 @@ export default function RegisterPage() {
         role: 'admin',
         tenant_slug: schoolCode,
       })
-      setStep(3)
+      // Auto-login after registration and go straight to dashboard
+      await login(data.email, data.password, schoolCode)
+      router.push('/feed')
     } catch (err: any) {
-      const msg = err.response?.data?.detail || err.response?.data?.message || 'Failed to create admin account'
+      const msg = err.message || 'Failed to create admin account'
       setError(typeof msg === 'string' ? msg : JSON.stringify(msg))
     } finally {
       setIsLoading(false)
