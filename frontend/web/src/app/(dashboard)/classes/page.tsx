@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen, Plus, X, Loader2, Pencil, Trash2,
-  Users, ChevronDown, ChevronUp, UserCheck, GraduationCap,
+  Users, ChevronDown, ChevronUp, UserCheck, CalendarDays,
 } from 'lucide-react'
 import api from '../../../lib/api'
 
@@ -18,6 +18,68 @@ const GRADE_COLORS = [
   'indigo', 'violet', 'sky', 'emerald', 'amber', 'orange',
   'pink', 'rose', 'teal', 'cyan', 'lime', 'red',
 ]
+
+function AcademicYearModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const now = new Date()
+  const nextYear = now.getFullYear() + 1
+  const defaultName = `${now.getFullYear()}-${String(nextYear).slice(-2)}`
+  const defaultStart = `${now.getFullYear()}-04-01`
+  const defaultEnd = `${nextYear}-03-31`
+
+  const [form, setForm] = useState({ name: defaultName, start_date: defaultStart, end_date: defaultEnd })
+  const [error, setError] = useState('')
+
+  const save = useMutation({
+    mutationFn: () => api.post('/api/v1/academic-years', { ...form, is_current: true }) as any,
+    onSuccess: (res: any) => { onCreated(res?.data?.id); onClose() },
+    onError: (e: any) => setError(e.response?.data?.detail || e.message || 'Failed to create'),
+  })
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <CalendarDays size={18} className="text-indigo-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Create Academic Year</h2>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          <p className="text-sm text-gray-500">An academic year is required before creating classes. Create one to get started.</p>
+          {error && <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{error}</div>}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Year Name *</label>
+            <input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+              placeholder="e.g. 2025-26"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Start Date *</label>
+              <input type="date" value={form.start_date} onChange={e => setForm(p => ({ ...p, start_date: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">End Date *</label>
+              <input type="date" value={form.end_date} onChange={e => setForm(p => ({ ...p, end_date: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3 px-6 py-4 bg-gray-50 rounded-b-2xl border-t border-gray-100">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-white transition">Cancel</button>
+          <button onClick={() => save.mutate()} disabled={save.isPending || !form.name || !form.start_date || !form.end_date}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+            {save.isPending && <Loader2 size={16} className="animate-spin" />}
+            Create & Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 function ClassFormModal({
   academicYearId, teachers, editing, onClose, onSaved,
@@ -219,6 +281,8 @@ function ClassCard({
 export default function ClassesPage() {
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
+  const [showAYForm, setShowAYForm] = useState(false)
+  const [newAcademicYearId, setNewAcademicYearId] = useState<string | null>(null)
   const [editing, setEditing] = useState<ClassItem | null>(null)
 
   const { data: ayData } = useQuery({
@@ -254,11 +318,32 @@ export default function ClassesPage() {
   }, {} as Record<string, ClassItem[]>)
   const sortedGrades = Object.keys(byGrade).sort((a, b) => parseInt(a) - parseInt(b))
 
+  const handleAddClass = () => {
+    setEditing(null)
+    if (!currentYear) {
+      setShowAYForm(true)
+    } else {
+      setShowForm(true)
+    }
+  }
+
+  const effectiveAcademicYearId = currentYear?.id || newAcademicYearId || ''
+
   return (
     <div className="space-y-6">
-      {showForm && currentYear && (
+      {showAYForm && (
+        <AcademicYearModal
+          onClose={() => setShowAYForm(false)}
+          onCreated={(id) => {
+            qc.invalidateQueries({ queryKey: ['academic-years'] })
+            setNewAcademicYearId(id)
+            setShowForm(true)
+          }}
+        />
+      )}
+      {showForm && effectiveAcademicYearId && (
         <ClassFormModal
-          academicYearId={currentYear.id}
+          academicYearId={effectiveAcademicYearId}
           teachers={teachers}
           editing={editing}
           onClose={() => { setShowForm(false); setEditing(null) }}
@@ -273,7 +358,7 @@ export default function ClassesPage() {
             {classes.length} classes{currentYear ? ` · ${currentYear.name}` : ''}
           </p>
         </div>
-        <button onClick={() => { setEditing(null); setShowForm(true) }}
+        <button onClick={handleAddClass}
           className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition">
           <Plus size={16} /> Add Class
         </button>

@@ -66,7 +66,7 @@ function StudentsGrid() {
     queryKey: ['classes'],
     queryFn: async () => {
       const res = await api.get('/api/v1/classes')
-      return (res as any)?.data?.items ?? []
+      return (res as any)?.data ?? []
     },
   })
 
@@ -425,7 +425,7 @@ function CalendarView({ tab }: { tab: TabType }) {
     queryKey: ['classes'],
     queryFn: async () => {
       const res = await api.get('/api/v1/classes')
-      return (res as any)?.data?.items ?? []
+      return (res as any)?.data ?? []
     },
     enabled: tab === 'students',
   })
