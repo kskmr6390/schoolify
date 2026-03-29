@@ -7,30 +7,23 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'ax
 const DEFAULT_API_URL = 'http://localhost:8000'
 
 function getApiBaseUrl() {
-  // Prefer explicit env var if set (works on server-side during build/export)
-  if (process.env.NEXT_PUBLIC_API_URL && typeof window === 'undefined') {
+  // Always prefer explicit env var first (set on Vercel / any deployment)
+  if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL
   }
 
-  // Client-side: always resolve from current hostname
+  // Client-side fallbacks for local development
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname
-
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:8000'
     }
-
-    // Docker desktop: use the same hostname as the page is served from
     if (hostname === 'host.docker.internal') {
       return 'http://host.docker.internal:8000'
     }
-
-    // Default for non-local host (e.g. deployed internal URL)
-    return `${window.location.protocol}//${hostname}:8000`
   }
 
-  // Server-side fallback: use env var or default to localhost
-  return process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_URL
+  return DEFAULT_API_URL
 }
 
 const BASE_URL = getApiBaseUrl()
