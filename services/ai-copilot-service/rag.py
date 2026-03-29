@@ -156,20 +156,31 @@ class LocalOllamaClient:
         return data.get("choices", [])[0].get("message", {}).get("content", "")
 
 
+PROVIDER_COSTS: Dict[str, float] = {
+    # cost per 1K tokens (rough estimate input+output blended)
+    "openai":    0.002,
+    "anthropic": 0.003,
+    "google":    0.0005,
+    "mistral":   0.001,
+    "groq":      0.0001,
+    "cohere":    0.001,
+    "local":     0.0,
+}
+
+
 class RAGPipeline:
-    """Full RAG pipeline: retrieve context -> augment -> generate."""
+    """Full RAG pipeline: retrieve context -> augment -> generate.
+    Supports all 7 providers: openai, anthropic, google, mistral, groq, cohere, local.
+    Provider selection and API key are passed per-request so each tenant can use their own.
+    """
 
     def __init__(self):
         from ..shared.config import settings
-        if settings.LLM_TYPE.lower() == "local":
-            self.client = LocalOllamaClient(settings.LOCAL_LLM_BASE_URL, settings.LOCAL_LLM_MODEL)
-            self.default_model = settings.LOCAL_LLM_MODEL
-            self.is_local = True
-        else:
-            import anthropic
-            self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-            self.default_model = "claude-opus-4-6"
-            self.is_local = False
+        self._settings = settings
+        # Local Ollama client used when provider='local'
+        self._ollama = LocalOllamaClient(settings.LOCAL_LLM_BASE_URL, settings.LOCAL_LLM_MODEL)
+        # Anthropic is the default server-side provider when caller sends no api_key
+        self._default_anthropic_key = settings.ANTHROPIC_API_KEY
 
     async def index_school_data(
         self,
@@ -229,25 +240,12 @@ class RAGPipeline:
         results = store.search(query, k=k)
         return [{"score": score, **meta} for score, meta in results if score > 0.3]
 
-    async def generate_response(
-        self,
-        query: str,
-        context: List[Dict],
-        conversation_history: List[Dict],
-        tenant_name: str = "the school",
-        model: Optional[str] = None,
-    ) -> Tuple[str, List[Dict]]:
-        """
-        Generate an AI response using Claude with retrieved context.
-        Returns (response_text, sources_used).
-        """
-        # Build context string
+    def _build_system_prompt(self, context: List[Dict], tenant_name: str) -> str:
         context_text = "\n\n".join([
             f"[Source {i+1} - {ctx.get('source_type', 'data')}]\n{ctx.get('content', '')}"
             for i, ctx in enumerate(context)
         ])
-
-        system_prompt = f"""You are an AI assistant for {tenant_name}'s school management system.
+        return f"""You are an AI assistant for {tenant_name}'s school management system.
 You help administrators, teachers, and parents understand school data and make informed decisions.
 
 Available school data context:
@@ -261,25 +259,136 @@ Guidelines:
 - Be concise but thorough
 - Format lists and statistics clearly"""
 
-        # Build messages from history
-        messages = []
-        for msg in conversation_history[-10:]:  # Last 10 messages for context
-            messages.append({"role": msg["role"], "content": msg["content"]})
-        messages.append({"role": "user", "content": query})
+    async def _call_provider(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, str]],
+        provider: str,
+        model: Optional[str],
+        api_key: Optional[str],
+    ) -> Tuple[str, int, int]:
+        """
+        Route to the correct LLM provider.
+        Returns (response_text, tokens_in, tokens_out).
+        """
+        import httpx
 
-        if self.is_local:
-            response_text = await self.client.generate(system_prompt, messages, max_tokens=1024, model=model or self.default_model)
-        else:
-            response = await self.client.messages.create(
-                model=self.default_model,
+        all_messages = [{"role": "system", "content": system_prompt}] + messages
+
+        if provider == "local":
+            text = await self._ollama.generate(system_prompt, messages, max_tokens=1024, model=model)
+            return text, 0, 0
+
+        if provider == "anthropic":
+            key = api_key or self._default_anthropic_key
+            import anthropic as anthropic_lib
+            client = anthropic_lib.AsyncAnthropic(api_key=key)
+            resp = await client.messages.create(
+                model=model or "claude-sonnet-4-6",
                 max_tokens=1024,
                 system=system_prompt,
                 messages=messages,
             )
-            response_text = response.content[0].text
+            return (
+                resp.content[0].text,
+                resp.usage.input_tokens,
+                resp.usage.output_tokens,
+            )
+
+        if provider == "openai":
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model or "gpt-4o-mini", "messages": all_messages, "max_tokens": 1024, "temperature": 0.3},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            choice = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            return choice, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+
+        if provider == "google":
+            contents = [{"role": "user" if m["role"] == "user" else "model",
+                         "parts": [{"text": m["content"]}]} for m in messages]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model or 'gemini-1.5-flash'}:generateContent?key={api_key}"
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(url, json={"contents": contents, "systemInstruction": {"parts": [{"text": system_prompt}]},
+                                                    "generationConfig": {"maxOutputTokens": 1024, "temperature": 0.3}})
+                resp.raise_for_status()
+                data = resp.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            usage = data.get("usageMetadata", {})
+            return text, usage.get("promptTokenCount", 0), usage.get("candidatesTokenCount", 0)
+
+        if provider == "mistral":
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.mistral.ai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model or "mistral-small-latest", "messages": all_messages, "max_tokens": 1024, "temperature": 0.3},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            usage = data.get("usage", {})
+            return data["choices"][0]["message"]["content"], usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+
+        if provider == "groq":
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model or "llama-3.3-70b-versatile", "messages": all_messages, "max_tokens": 1024, "temperature": 0.3},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            usage = data.get("usage", {})
+            return data["choices"][0]["message"]["content"], usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+
+        if provider == "cohere":
+            chat_history = [{"role": "USER" if m["role"] == "user" else "CHATBOT", "message": m["content"]}
+                            for m in messages[:-1]]
+            last_msg = messages[-1]["content"] if messages else ""
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.cohere.ai/v1/chat",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model or "command-r", "message": last_msg, "chat_history": chat_history,
+                          "preamble": system_prompt},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            tokens = data.get("meta", {}).get("tokens", {})
+            return data["text"], tokens.get("input_tokens", 0), tokens.get("output_tokens", 0)
+
+        raise ValueError(f"Unknown provider: {provider}")
+
+    async def generate_response(
+        self,
+        query: str,
+        context: List[Dict],
+        conversation_history: List[Dict],
+        tenant_name: str = "the school",
+        model: Optional[str] = None,
+        provider: str = "anthropic",
+        api_key: Optional[str] = None,
+    ) -> Tuple[str, List[Dict], int, int]:
+        """
+        Generate an AI response using the specified provider + RAG context.
+        Returns (response_text, sources_used, tokens_in, tokens_out).
+        """
+        system_prompt = self._build_system_prompt(context, tenant_name)
+        messages = []
+        for msg in conversation_history[-10:]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": query})
+
+        response_text, tok_in, tok_out = await self._call_provider(
+            system_prompt, messages, provider, model, api_key
+        )
         sources = [{"source_type": ctx.get("source_type"), "source_id": ctx.get("source_id")}
                    for ctx in context]
-        return response_text, sources
+        return response_text, sources, tok_in, tok_out
 
     async def answer_question(
         self,
@@ -288,16 +397,21 @@ Guidelines:
         conversation_history: List[Dict] = None,
         tenant_name: str = "School",
         model: Optional[str] = None,
+        provider: str = "anthropic",
+        api_key: Optional[str] = None,
     ) -> Dict:
         """Full RAG pipeline: retrieve → augment → generate."""
         context = await self.retrieve_context(tenant_id, query)
-        response, sources = await self.generate_response(
-            query, context, conversation_history or [], tenant_name, model=model
+        response, sources, tok_in, tok_out = await self.generate_response(
+            query, context, conversation_history or [], tenant_name,
+            model=model, provider=provider, api_key=api_key,
         )
         return {
             "response": response,
             "sources": sources,
             "context_used": len(context) > 0,
+            "tokens_input": tok_in,
+            "tokens_output": tok_out,
         }
 
 

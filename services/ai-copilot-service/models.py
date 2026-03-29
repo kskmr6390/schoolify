@@ -55,6 +55,22 @@ class LLMUsageLog(TenantAwareModel):
     cost_usd     = Column(Float,   nullable=False, default=0.0)  # $0 for local
 
 
+class LLMCallLog(TenantAwareModel):
+    """Per-call LLM log — powers the pass/fail/error metrics dashboard."""
+    __tablename__ = "llm_call_logs"
+
+    user_id         = Column(UUID(as_uuid=True), nullable=True,  index=True)
+    conversation_id = Column(UUID(as_uuid=True), nullable=True,  index=True)
+    provider        = Column(String(20),         nullable=False, index=True)   # openai|anthropic|google|mistral|groq|cohere|local
+    model_name      = Column(String(80),         nullable=True)
+    tokens_input    = Column(Integer,            nullable=False, default=0)
+    tokens_output   = Column(Integer,            nullable=False, default=0)
+    latency_ms      = Column(Integer,            nullable=False, default=0)
+    status          = Column(String(10),         nullable=False, default="pass", index=True)  # pass | fail
+    error_message   = Column(Text,               nullable=True)
+    cost_usd        = Column(Float,              nullable=False, default=0.0)
+
+
 class TrainingSchedule(TenantAwareModel):
     """One active schedule per tenant — upsert semantics (delete old, insert new)."""
     __tablename__ = "training_schedules"

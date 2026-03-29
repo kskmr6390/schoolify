@@ -14,7 +14,7 @@ from ..shared.config import settings
 from ..shared.database import get_db
 from ..shared.schemas import StandardResponse
 from ..shared.security import get_current_user, require_roles
-from .models import CopilotConversation, CopilotMessage, TrainingJob, TrainingSchedule
+from .models import CopilotConversation, CopilotMessage, LLMCallLog, TrainingJob, TrainingSchedule
 from .rag import rag_pipeline, get_store
 
 router = APIRouter(prefix="/api/v1/copilot", tags=["AI Copilot"])
@@ -34,6 +34,9 @@ ARCH_TO_OLLAMA = {
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[UUID] = None
+    provider: str = "anthropic"           # openai|anthropic|google|mistral|groq|cohere|local
+    model: Optional[str] = None           # provider-specific model id
+    api_key: Optional[str] = None         # user-supplied key (not stored)
 
 
 class ChatResponse(BaseModel):
@@ -507,6 +510,7 @@ async def chat(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    import time
     from uuid import UUID as UUIDT
     tid = UUIDT(current_user.tenant_id)
     uid = UUIDT(current_user.user_id)
@@ -533,11 +537,49 @@ async def chat(
     )
     history = [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
 
-    active_model = await _get_tenant_active_model(str(tid), db)
-    result_data = await rag_pipeline.answer_question(
-        tenant_id=str(tid), query=body.message, conversation_history=history,
-        model=_ollama_model_name(active_model),
-    )
+    # Determine model — for local use Ollama name, else use user-supplied or default
+    if body.provider == "local":
+        active_arch = await _get_tenant_active_model(str(tid), db)
+        resolved_model = _ollama_model_name(body.model or active_arch)
+    else:
+        resolved_model = body.model
+
+    t0 = time.time()
+    call_status = "pass"
+    error_msg = None
+    result_data: dict = {}
+    try:
+        result_data = await rag_pipeline.answer_question(
+            tenant_id=str(tid),
+            query=body.message,
+            conversation_history=history,
+            model=resolved_model,
+            provider=body.provider,
+            api_key=body.api_key,
+        )
+    except Exception as exc:
+        call_status = "fail"
+        error_msg = str(exc)
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
+    finally:
+        latency_ms = int((time.time() - t0) * 1000)
+        from .rag import PROVIDER_COSTS
+        tok_in  = result_data.get("tokens_input",  0) if result_data else 0
+        tok_out = result_data.get("tokens_output", 0) if result_data else 0
+        cost    = (tok_in + tok_out) / 1000 * PROVIDER_COSTS.get(body.provider, 0.0)
+        db.add(LLMCallLog(
+            tenant_id=tid,
+            user_id=uid,
+            conversation_id=conversation.id,
+            provider=body.provider,
+            model_name=resolved_model,
+            tokens_input=tok_in,
+            tokens_output=tok_out,
+            latency_ms=latency_ms,
+            status=call_status,
+            error_message=error_msg,
+            cost_usd=cost,
+        ))
 
     db.add(CopilotMessage(tenant_id=tid, conversation_id=conversation.id,
                           role="user", content=body.message))
@@ -555,6 +597,239 @@ async def chat(
         response=result_data["response"],
         sources=result_data["sources"],
     ))
+
+
+# ── Conversation History ──────────────────────────────────────────────────────
+
+@router.get("/conversations", response_model=StandardResponse[list])
+async def list_conversations(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List recent conversations for the current user."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    uid = UUIDT(current_user.user_id)
+    result = await db.execute(
+        select(CopilotConversation)
+        .where(and_(CopilotConversation.tenant_id == tid,
+                    CopilotConversation.user_id == uid,
+                    CopilotConversation.is_active == True))
+        .order_by(CopilotConversation.created_at.desc())
+        .limit(30)
+    )
+    convs = result.scalars().all()
+    return StandardResponse.ok([
+        {"id": str(c.id), "title": c.title, "created_at": c.created_at.isoformat()}
+        for c in convs
+    ])
+
+
+@router.get("/conversations/{conversation_id}/messages", response_model=StandardResponse[list])
+async def get_conversation_messages(
+    conversation_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all messages for a conversation (most recent first, capped at 100)."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    result = await db.execute(
+        select(CopilotConversation).where(
+            and_(CopilotConversation.id == conversation_id,
+                 CopilotConversation.tenant_id == tid)
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    msgs = await db.execute(
+        select(CopilotMessage)
+        .where(CopilotMessage.conversation_id == conversation_id)
+        .order_by(CopilotMessage.created_at)
+        .limit(100)
+    )
+    return StandardResponse.ok([
+        {"id": str(m.id), "role": m.role, "content": m.content,
+         "sources": m.sources or [], "created_at": m.created_at.isoformat()}
+        for m in msgs.scalars().all()
+    ])
+
+
+@router.delete("/conversations/{conversation_id}", response_model=StandardResponse[dict])
+async def delete_conversation(
+    conversation_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    result = await db.execute(
+        select(CopilotConversation).where(
+            and_(CopilotConversation.id == conversation_id,
+                 CopilotConversation.tenant_id == tid)
+        )
+    )
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conv.is_active = False
+    return StandardResponse.ok({"message": "Conversation deleted"})
+
+
+# ── LLM Metrics ──────────────────────────────────────────────────────────────
+
+@router.get("/metrics", response_model=StandardResponse[dict])
+async def get_llm_metrics(
+    days: int = 30,
+    current_user=Depends(require_roles("admin", "super_admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return pass/fail/error metrics for LLM calls in this tenant."""
+    from uuid import UUID as UUIDT
+    from datetime import date
+    from sqlalchemy import func, case
+    tid = UUIDT(current_user.tenant_id)
+    since = datetime.utcnow() - timedelta(days=days)
+
+    rows = await db.execute(
+        select(LLMCallLog)
+        .where(and_(LLMCallLog.tenant_id == tid, LLMCallLog.created_at >= since))
+    )
+    logs = rows.scalars().all()
+
+    total = len(logs)
+    passed = sum(1 for l in logs if l.status == "pass")
+    failed = total - passed
+    pass_rate = round(passed / total * 100, 1) if total else 0
+    avg_latency = round(sum(l.latency_ms for l in logs) / total) if total else 0
+    total_cost = round(sum(l.cost_usd for l in logs), 4)
+    total_tokens = sum(l.tokens_input + l.tokens_output for l in logs)
+
+    by_provider: dict = {}
+    for l in logs:
+        p = l.provider
+        if p not in by_provider:
+            by_provider[p] = {"total": 0, "pass": 0, "fail": 0, "tokens": 0, "cost": 0.0}
+        by_provider[p]["total"] += 1
+        by_provider[p]["pass" if l.status == "pass" else "fail"] += 1
+        by_provider[p]["tokens"] += l.tokens_input + l.tokens_output
+        by_provider[p]["cost"] += l.cost_usd
+
+    recent_errors = [
+        {"provider": l.provider, "model": l.model_name,
+         "error": l.error_message, "at": l.created_at.isoformat()}
+        for l in sorted(logs, key=lambda x: x.created_at, reverse=True)
+        if l.status == "fail" and l.error_message
+    ][:10]
+
+    # Daily chart data (last 30 days)
+    daily: dict = {}
+    for l in logs:
+        day = l.created_at.strftime("%Y-%m-%d")
+        if day not in daily:
+            daily[day] = {"pass": 0, "fail": 0}
+        daily[day]["pass" if l.status == "pass" else "fail"] += 1
+
+    return StandardResponse.ok({
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": pass_rate,
+        "avg_latency_ms": avg_latency,
+        "total_cost_usd": total_cost,
+        "total_tokens": total_tokens,
+        "by_provider": by_provider,
+        "recent_errors": recent_errors,
+        "daily": daily,
+        "period_days": days,
+    })
+
+
+# ── System Check (for local LLM installer wizard) ────────────────────────────
+
+@router.get("/system/check", response_model=StandardResponse[dict])
+async def system_check(current_user=Depends(get_current_user)):
+    """Return server hardware info to help user select a local model."""
+    import platform
+    import shutil
+    import subprocess
+
+    def _ram_gb() -> float:
+        try:
+            import psutil
+            return round(psutil.virtual_memory().total / (1024 ** 3), 1)
+        except Exception:
+            return 0.0
+
+    def _disk_gb() -> float:
+        try:
+            import psutil
+            return round(psutil.disk_usage("/").free / (1024 ** 3), 1)
+        except Exception:
+            return 0.0
+
+    def _cpu_cores() -> int:
+        try:
+            import os
+            return os.cpu_count() or 0
+        except Exception:
+            return 0
+
+    ram_gb   = _ram_gb()
+    disk_gb  = _disk_gb()
+    cpu_cores = _cpu_cores()
+    os_name  = platform.system()
+
+    # Determine compatible models
+    compatible = []
+    if ram_gb >= 4 and disk_gb >= 2:
+        compatible.append("tinyllama-1.1b")
+    if ram_gb >= 6 and disk_gb >= 3:
+        compatible.append("phi-2")
+    if ram_gb >= 8 and disk_gb >= 4:
+        compatible.extend(["phi-3-mini", "llama-3.2-3b"])
+    if ram_gb >= 16 and disk_gb >= 6:
+        compatible.append("mistral-7b")
+
+    # Check if Ollama is already reachable
+    ollama_ok = False
+    ollama_version = None
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(f"{settings.LOCAL_LLM_BASE_URL}/api/tags")
+            ollama_ok = resp.status_code == 200
+            if ollama_ok:
+                # try to get version
+                vresp = await client.get(f"{settings.LOCAL_LLM_BASE_URL}/api/version")
+                if vresp.status_code == 200:
+                    ollama_version = vresp.json().get("version")
+    except Exception:
+        pass
+
+    return StandardResponse.ok({
+        "ram_gb":        ram_gb,
+        "disk_free_gb":  disk_gb,
+        "cpu_cores":     cpu_cores,
+        "os":            os_name,
+        "compatible_models": compatible,
+        "ollama_reachable":  ollama_ok,
+        "ollama_version":    ollama_version,
+        "ollama_url":        settings.LOCAL_LLM_BASE_URL,
+    })
+
+
+@router.post("/system/pull-model", response_model=StandardResponse[dict])
+async def pull_model_bg(
+    body: dict,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(require_roles("admin")),
+):
+    """Trigger an async Ollama model pull. Frontend polls /model/status to track."""
+    arch = body.get("arch", "tinyllama-1.1b")
+    background_tasks.add_task(_ensure_ollama_model, arch)
+    return StandardResponse.ok({"message": f"Pull started for {arch}", "arch": arch})
 
 
 @router.post("/train", response_model=StandardResponse[dict])
