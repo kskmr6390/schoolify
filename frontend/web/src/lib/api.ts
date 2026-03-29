@@ -4,15 +4,7 @@
  */
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 
-const DEFAULT_API_URL = 'http://localhost:8000'
-
 function getApiBaseUrl() {
-  // Always prefer explicit env var first (set on Vercel / any deployment)
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL
-  }
-
-  // Client-side fallbacks for local development
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
@@ -21,9 +13,10 @@ function getApiBaseUrl() {
     if (hostname === 'host.docker.internal') {
       return 'http://host.docker.internal:8000'
     }
+    // On any deployed host, use relative URLs so Next.js rewrites proxy to backend
+    return ''
   }
-
-  return DEFAULT_API_URL
+  return 'http://localhost:8000'
 }
 
 const BASE_URL = getApiBaseUrl()
@@ -79,8 +72,6 @@ const api: AxiosInstance = axios.create({
   headers: { 'Content-Type': 'application/json' },
   timeout: 30000,
 })
-
-const HARD_FALLBACK_URL = 'http://localhost:8000'
 
 // Request interceptor: inject auth and tenant headers
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
