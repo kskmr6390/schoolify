@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { Bell, Menu, Search } from 'lucide-react'
+import { useRouter, usePathname } from 'next/navigation'
+import { Bell, Bot, Menu, Search } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { Sidebar } from '../../components/layout/Sidebar'
 import ChatWidget from '../../components/chat/ChatWidget'
@@ -12,6 +12,7 @@ import { useEffect } from 'react'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
+  const pathname = usePathname()
   const { isAuthenticated, user } = useAuthStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
@@ -59,6 +60,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
 
           <div className="flex items-center gap-2 ml-auto">
+            {/* AI Copilot — blinking indicator */}
+            <button
+              onClick={() => router.push('/ai-copilot')}
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-colors ${
+                pathname?.startsWith('/ai-copilot')
+                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                  : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+              }`}
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
+                <span className={`relative inline-flex rounded-full h-2 w-2 ${pathname?.startsWith('/ai-copilot') ? 'bg-white' : 'bg-indigo-600'}`} />
+              </span>
+              <Bot size={13} />
+              <span className="text-xs font-semibold tracking-wide">AI Copilot</span>
+            </button>
+
             {/* Notifications */}
             <button
               onClick={() => router.push('/notifications')}
