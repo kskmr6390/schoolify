@@ -11,9 +11,10 @@ import {
   Users, GraduationCap, BookOpen, TrendingUp, TrendingDown,
   IndianRupee, AlertCircle, CheckCircle2, BarChart3,
   Award, ClipboardList, Calendar, UserCheck, Activity,
-  Briefcase, ShieldCheck, Target, Zap, Clock, Star,
+  Briefcase, ShieldCheck, Target, Zap, Clock, Star, Download,
 } from 'lucide-react'
 import api from '../../../lib/api'
+import { downloadCSV } from '../../../lib/csvExport'
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316', '#84cc16', '#ec4899', '#14b8a6']
 const FEE_STATUS_COLORS: Record<string, string> = {
@@ -109,6 +110,45 @@ export default function ReportsPage() {
 
   const isErr = !isLoading && (error || (!d || Object.keys(d).length === 0))
 
+  const exportCurrentTab = () => {
+    if (tab === 'Overview') {
+      downloadCSV('overview', ['Metric', 'Value'], [
+        ['Total Students',   ov.total_students ?? 0],
+        ['Total Teachers',   ov.total_teachers ?? 0],
+        ['Total Classes',    ov.total_classes ?? 0],
+        ['Fee Collected',    ov.fee_collected ?? 0],
+        ['Fee Outstanding',  ov.fee_outstanding ?? 0],
+        ['Collection Rate',  `${ov.fee_collection_rate ?? 0}%`],
+        ['Pass Rate',        `${d.pass_fail?.pass_rate ?? 0}%`],
+      ])
+    } else if (tab === 'Attendance') {
+      const rows = (d.attendance_trend ?? []).map((r: any) => [r.month ?? r.date, r.rate ?? r.present ?? 0])
+      downloadCSV('attendance-trend', ['Period', 'Rate / Present'], rows)
+    } else if (tab === 'Academics') {
+      const rows = (d.grade_distribution ?? []).map((r: any) => [r.grade ?? r.name, r.count ?? r.value ?? 0])
+      downloadCSV('academics-grade-distribution', ['Grade', 'Count'], rows)
+    } else if (tab === 'Fees') {
+      const rows = (d.fee_status_breakdown ?? d.fee_breakdown ?? []).map((r: any) => [r.name ?? r.status, r.value ?? r.count ?? 0])
+      downloadCSV('fee-status-breakdown', ['Status', 'Count'], rows)
+    } else if (tab === 'HR & Staff') {
+      const rows = (d.staff_by_department ?? d.staff_breakdown ?? []).map((r: any) => [r.name ?? r.dept, r.value ?? r.count ?? 0])
+      downloadCSV('staff-breakdown', ['Department', 'Count'], rows)
+    } else if (tab === 'Students') {
+      const rows = (d.students_per_class ?? []).map((r: any) => [r.class ?? r.name, r.students ?? r.value ?? 0])
+      downloadCSV('students-per-class', ['Class', 'Students'], rows)
+    } else if (tab === 'Performance') {
+      const rows = (d.top_performers ?? []).map((r: any) => [r.name, r.score ?? r.marks ?? 0, r.class ?? ''])
+      downloadCSV('top-performers', ['Name', 'Score', 'Class'], rows)
+    } else if (tab === 'AI & LLM') {
+      downloadCSV('llm-usage', ['Metric', 'Value'], [
+        ['Total Requests', llmSum.total_requests ?? 0],
+        ['Total Tokens',   llmSum.total_tokens ?? 0],
+        ['Total Cost',     llmSum.total_cost ?? 0],
+        ['Avg Latency ms', llmSum.avg_latency_ms ?? 0],
+      ])
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -117,6 +157,11 @@ export default function ReportsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Reports & Analytics</h1>
           <p className="text-gray-500 text-sm mt-1">School-wide performance insights and advanced metrics</p>
         </div>
+        <button onClick={exportCurrentTab} disabled={isLoading}
+          className="flex items-center gap-2 px-4 py-2 border border-gray-200 bg-white text-gray-700 text-sm font-medium rounded-xl hover:bg-gray-50 disabled:opacity-40 transition">
+          <Download size={15} />
+          Export {tab}
+        </button>
       </div>
 
       {/* Top KPI Row */}

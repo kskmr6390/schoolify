@@ -6,9 +6,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CreditCard, Plus, X, Loader2, Search, FileText,
   CheckCircle2, AlertCircle, Clock, IndianRupee, Receipt,
-  Eye, RefreshCw, Trash2,
+  Eye, RefreshCw, Trash2, Download,
 } from 'lucide-react'
 import api from '../../../lib/api'
+import { downloadCSV } from '../../../lib/csvExport'
 import FeeReceiptModal, { type FeeReceiptData, type ReceiptTemplate } from '../../../components/FeeReceiptModal'
 
 const STATUS_STYLES: Record<string, string> = {
@@ -356,6 +357,22 @@ export default function FeesPage() {
   const total: number = data?.total ?? 0
   const totalPages = Math.ceil(total / 20)
 
+  const exportInvoices = () => {
+    downloadCSV('invoices',
+      ['Invoice #', 'Student', 'Status', 'Total', 'Paid', 'Balance Due', 'Issued', 'Due Date'],
+      invoices.map(i => [
+        i.invoice_number,
+        i.student_name ?? i.student_id,
+        i.status,
+        i.total_amount,
+        i.paid_amount ?? 0,
+        i.balance_due ?? (i.total_amount - (i.paid_amount ?? 0)),
+        i.issued_date,
+        i.due_date,
+      ]),
+    )
+  }
+
   const summary = {
     outstanding: invoices.reduce((s: number, i: any) => s + (i.balance_due ?? (i.total_amount - i.paid_amount)), 0),
     paid: invoices.filter((i: any) => i.status === 'paid' || i.status === 'PAID').length,
@@ -373,10 +390,16 @@ export default function FeesPage() {
           <h1 className="text-2xl font-bold text-gray-900">Fee Management</h1>
           <p className="text-sm text-gray-500 mt-1">{total} invoices total</p>
         </div>
-        <button onClick={() => setShowGenerate(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition">
-          <Plus size={16} /> Generate Invoice
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportInvoices} disabled={invoices.length === 0}
+            className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40 transition">
+            <Download size={15} /> Export CSV
+          </button>
+          <button onClick={() => setShowGenerate(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition">
+            <Plus size={16} /> Generate Invoice
+          </button>
+        </div>
       </div>
 
       {/* Summary */}
