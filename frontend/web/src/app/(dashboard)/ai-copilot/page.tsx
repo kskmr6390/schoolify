@@ -93,7 +93,8 @@ export default function AICopilotPage() {
         conversation_id: conversationId,
         provider,
         model: provider === 'local' ? undefined : currentModel,
-        api_key: apiKeys[provider] || undefined,
+        // api_key is NOT sent here — it's saved to the server once via
+        // Settings → AI & LLM → Save, and retrieved from Redis on each request
       }) as any,
     onSuccess: (data: any) => {
       const { conversation_id, response, sources } = data.data

@@ -570,13 +570,17 @@ export default function SettingsPage() {
   const handleSaveApiKey = async () => {
     const provider = ai.provider
     const key = ai.apiKeys[provider] ?? ''
-    if (!key) return
+    if (!key || key.startsWith('•')) return  // already masked/saved
     try {
       await api.post('/api/v1/copilot/config/api-key', { provider, api_key: key })
+      // Replace the raw key with a masked sentinel so it's no longer in localStorage
+      const masked = key.slice(0, 6) + '••••••••••••' + key.slice(-4)
+      ai.setApiKey(provider, masked)
       setTestMsg('API key saved to server')
       setTestState('ok')
     } catch {
-      setTestMsg('Saved locally — server sync failed')
+      setTestMsg('Save failed — please try again')
+      setTestState('fail')
     }
   }
 
