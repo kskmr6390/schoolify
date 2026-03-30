@@ -130,7 +130,10 @@ def main():
     print("\n[0] Cleaning old SBM data …")
     cur.execute("DELETE FROM tenants WHERE slug = %s", (TENANT_SLUG,))
     conn.commit()
+    # invoice_items cascades from invoices; attendance_entries cascades from attendance_records
     for tbl in [
+        "academic_performance_snapshots", "enrollment_snapshots",
+        "monthly_fee_snapshots", "daily_attendance_snapshots",
         "copilot_conversations", "training_jobs", "training_schedules",
         "notifications", "notification_preferences", "device_tokens",
         "submissions", "exam_results", "exams", "assignments",
@@ -142,9 +145,11 @@ def main():
         "staff_profiles", "user_profiles", "users",
     ]:
         try:
+            cur.execute("SAVEPOINT cleanup_sp")
             cur.execute(f"DELETE FROM {tbl} WHERE tenant_id = %s", (TENANT_ID,))
+            cur.execute("RELEASE SAVEPOINT cleanup_sp")
         except Exception as e:
-            conn.rollback()
+            cur.execute("ROLLBACK TO SAVEPOINT cleanup_sp")
             print(f"  warning: {tbl}: {e}")
     conn.commit()
     print("  done.")
@@ -684,6 +689,162 @@ def main():
     conn.commit()
     print("  ✓ 210 notifications")
 
+    # ── 17. Daily Attendance Snapshots ────────────────────────────────────
+    print("\n[17] Daily attendance snapshots …")
+    cur.execute("""
+        SELECT ar.class_id::text, ar.date,
+               COUNT(ae.id)                                             AS total,
+               SUM(CASE WHEN ae.status = 'PRESENT' THEN 1 ELSE 0 END)  AS present,
+               SUM(CASE WHEN ae.status = 'ABSENT'  THEN 1 ELSE 0 END)  AS absent,
+               SUM(CASE WHEN ae.status = 'LATE'    THEN 1 ELSE 0 END)  AS late
+        FROM   attendance_records ar
+        JOIN   attendance_entries ae ON ae.record_id = ar.id
+        WHERE  ar.tenant_id = %s
+        GROUP  BY ar.class_id, ar.date
+    """, (TENANT_ID,))
+    att_agg_rows = cur.fetchall()
+    das_n = 0
+    for class_id, att_date, total, present, absent, late in att_agg_rows:
+        rate = round(float(present) / float(total) * 100, 2) if total else 0.0
+        cur.execute("""
+            INSERT INTO daily_attendance_snapshots
+                (id, tenant_id, class_id, date, total_students, present_count,
+                 absent_count, late_count, attendance_rate, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (uid(), TENANT_ID, class_id, att_date,
+              int(total), int(present), int(absent), int(late), rate, NOW, NOW))
+        das_n += 1
+    conn.commit()
+    print(f"  ✓ {das_n} daily attendance snapshots")
+
+    # ── 18. Monthly Fee Snapshots ──────────────────────────────────────────
+    print("\n[18] Monthly fee snapshots …")
+    cur.execute("""
+        SELECT EXTRACT(YEAR  FROM issued_date)::int                   AS yr,
+               EXTRACT(MONTH FROM issued_date)::int                   AS mo,
+               COALESCE(SUM(total_amount), 0)                         AS invoiced,
+               COALESCE(SUM(paid_amount),  0)                         AS collected,
+               COALESCE(SUM(CASE WHEN status IN ('PENDING','PARTIAL','OVERDUE')
+                                 THEN total_amount - paid_amount
+                                 ELSE 0 END), 0)                      AS outstanding,
+               COUNT(CASE WHEN paid_amount > 0 THEN 1 END)            AS pay_cnt
+        FROM   invoices
+        WHERE  tenant_id = %s
+        GROUP  BY yr, mo
+        ORDER  BY yr, mo
+    """, (TENANT_ID,))
+    fee_agg_rows = cur.fetchall()
+    mfs_n = 0
+    for yr, mo, invoiced, collected, outstanding, pay_cnt in fee_agg_rows:
+        coll_rate = round(float(collected) / float(invoiced) * 100, 2) if invoiced else 0.0
+        cur.execute("""
+            INSERT INTO monthly_fee_snapshots
+                (id, tenant_id, year, month, total_invoiced, total_collected,
+                 total_outstanding, collection_rate, payment_count,
+                 created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (uid(), TENANT_ID, yr, mo,
+              float(invoiced), float(collected), float(outstanding),
+              coll_rate, int(pay_cnt), NOW, NOW))
+        mfs_n += 1
+    conn.commit()
+    print(f"  ✓ {mfs_n} monthly fee snapshots")
+
+    # ── 19. Enrollment Snapshots ───────────────────────────────────────────
+    print("\n[19] Enrollment snapshots …")
+    # Per-class snapshots
+    cur.execute("""
+        SELECT class_id::text,
+               COUNT(*)                                                 AS total,
+               SUM(CASE WHEN status != 'TRANSFERRED' THEN 1 ELSE 0 END) AS active_enroll,
+               SUM(CASE WHEN status  = 'TRANSFERRED' THEN 1 ELSE 0 END) AS withdrawals,
+               SUM(CASE WHEN gender  = 'MALE'        THEN 1 ELSE 0 END) AS males,
+               SUM(CASE WHEN gender  = 'FEMALE'      THEN 1 ELSE 0 END) AS females
+        FROM   students
+        WHERE  tenant_id = %s
+        GROUP  BY class_id
+    """, (TENANT_ID,))
+    enroll_rows = cur.fetchall()
+    es_n = 0
+    for class_id, total, active_enroll, withdrawals, males, females in enroll_rows:
+        cur.execute("""
+            INSERT INTO enrollment_snapshots
+                (id, tenant_id, academic_year_id, class_id, total_students,
+                 new_enrollments, withdrawals, gender_breakdown,
+                 created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)
+        """, (uid(), TENANT_ID, ay_id, class_id,
+              int(total), int(active_enroll), int(withdrawals),
+              json.dumps({"male": int(males), "female": int(females)}),
+              NOW, NOW))
+        es_n += 1
+    # School-wide snapshot (class_id = NULL)
+    cur.execute("""
+        SELECT COUNT(*),
+               SUM(CASE WHEN status != 'TRANSFERRED' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN status  = 'TRANSFERRED' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN gender  = 'MALE'        THEN 1 ELSE 0 END),
+               SUM(CASE WHEN gender  = 'FEMALE'      THEN 1 ELSE 0 END)
+        FROM   students
+        WHERE  tenant_id = %s
+    """, (TENANT_ID,))
+    sw = cur.fetchone()
+    cur.execute("""
+        INSERT INTO enrollment_snapshots
+            (id, tenant_id, academic_year_id, class_id, total_students,
+             new_enrollments, withdrawals, gender_breakdown,
+             created_at, updated_at)
+        VALUES (%s,%s,%s,NULL,%s,%s,%s,%s::jsonb,%s,%s)
+    """, (uid(), TENANT_ID, ay_id,
+          int(sw[0]), int(sw[1]), int(sw[2]),
+          json.dumps({"male": int(sw[3]), "female": int(sw[4])}),
+          NOW, NOW))
+    es_n += 1
+    conn.commit()
+    print(f"  ✓ {es_n} enrollment snapshots  (14 per-class + 1 school-wide)")
+
+    # ── 20. Academic Performance Snapshots ────────────────────────────────
+    print("\n[20] Academic performance snapshots …")
+    cur.execute("""
+        SELECT e.id::text, e.class_id::text, e.subject_id::text,
+               e.max_marks,
+               COUNT(r.id)                                              AS total,
+               COALESCE(AVG(r.marks_obtained), 0)                       AS avg_score,
+               SUM(CASE WHEN r.is_pass THEN 1 ELSE 0 END)               AS pass_cnt,
+               SUM(CASE WHEN r.grade = 'A+' THEN 1 ELSE 0 END)          AS ap,
+               SUM(CASE WHEN r.grade = 'A'  THEN 1 ELSE 0 END)          AS a,
+               SUM(CASE WHEN r.grade = 'B+' THEN 1 ELSE 0 END)          AS bp,
+               SUM(CASE WHEN r.grade = 'B'  THEN 1 ELSE 0 END)          AS b,
+               SUM(CASE WHEN r.grade = 'C'  THEN 1 ELSE 0 END)          AS c,
+               SUM(CASE WHEN r.grade = 'D'  THEN 1 ELSE 0 END)          AS d,
+               SUM(CASE WHEN r.grade = 'F'  THEN 1 ELSE 0 END)          AS f
+        FROM   exams e
+        JOIN   exam_results r ON r.exam_id = e.id
+        WHERE  e.tenant_id = %s
+        GROUP  BY e.id, e.class_id, e.subject_id, e.max_marks
+    """, (TENANT_ID,))
+    perf_rows = cur.fetchall()
+    aps_n = 0
+    for (exam_id, class_id, subj_id, max_m,
+         total, avg_score, pass_cnt,
+         ap, a, bp, b, c, d, f) in perf_rows:
+        pass_rate = round(float(pass_cnt) / float(total) * 100, 2) if total else 0.0
+        avg_pct   = round(float(avg_score) / float(max_m) * 100, 2) if max_m else 0.0
+        grade_dist = {"A+": int(ap), "A": int(a), "B+": int(bp), "B": int(b),
+                      "C": int(c), "D": int(d), "F": int(f)}
+        cur.execute("""
+            INSERT INTO academic_performance_snapshots
+                (id, tenant_id, exam_id, class_id, subject_id,
+                 avg_score, pass_rate, grade_distribution, total_students,
+                 created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+        """, (uid(), TENANT_ID, exam_id, class_id, subj_id,
+              avg_pct, pass_rate, json.dumps(grade_dist), int(total),
+              NOW, NOW))
+        aps_n += 1
+    conn.commit()
+    print(f"  ✓ {aps_n} academic performance snapshots")
+
     # ── Summary ───────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("  ✅  SBM Fixture Seed COMPLETE")
@@ -699,6 +860,7 @@ def main():
     print(f"  Assign.  : {asgn_n}  |  submissions: {sub_n}")
     print(f"  Posts    : 210  |  likes: 210")
     print(f"  Notifs   : 210")
+    print(f"  Att.Snaps: {das_n} daily  |  {mfs_n} monthly fee  |  {es_n} enrollment  |  {aps_n} performance")
     print("=" * 60)
     print(f"\n  Sign in at http://localhost:3000")
     print(f"  tenant_slug = {TENANT_SLUG}")
@@ -707,6 +869,8 @@ def main():
     cur.close()
     conn.close()
 
+
+run = main
 
 if __name__ == "__main__":
     main()

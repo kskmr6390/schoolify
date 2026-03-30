@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from services.shared.middleware import LoggingMiddleware, TenantMiddleware, RateLimitMiddleware
 from services.shared.database import engine, Base
 from services.analytics_service.router import router
+import services.analytics_service.models  # noqa: F401 — ensures snapshot tables are registered with Base
 
 
 @asynccontextmanager
