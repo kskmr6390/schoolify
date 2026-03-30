@@ -558,6 +558,26 @@ export default function SettingsPage() {
     const res = await testConnection(provider, key, model)
     setTestState(res.ok ? 'ok' : 'fail')
     setTestMsg(res.ok ? `Connected — ${res.latencyMs}ms` : (res.error ?? 'Connection failed'))
+    // On successful test, persist the key server-side so the copilot page
+    // can use it on first request even before client-side store hydrates
+    if (res.ok && key) {
+      try {
+        await api.post('/api/v1/copilot/config/api-key', { provider, api_key: key })
+      } catch { /* non-fatal — local store still works */ }
+    }
+  }
+
+  const handleSaveApiKey = async () => {
+    const provider = ai.provider
+    const key = ai.apiKeys[provider] ?? ''
+    if (!key) return
+    try {
+      await api.post('/api/v1/copilot/config/api-key', { provider, api_key: key })
+      setTestMsg('API key saved to server')
+      setTestState('ok')
+    } catch {
+      setTestMsg('Saved locally — server sync failed')
+    }
   }
 
   const { data, isLoading } = useQuery({
@@ -1225,6 +1245,10 @@ export default function SettingsPage() {
                               {showKey[ai.provider] ? <EyeOff size={15} /> : <Eye size={15} />}
                             </button>
                           </div>
+                          <button onClick={handleSaveApiKey} disabled={!ai.apiKeys[ai.provider]}
+                            className="flex items-center gap-1.5 px-3 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-40 transition whitespace-nowrap">
+                            <Save size={13} /> Save
+                          </button>
                           <button onClick={handleTest} disabled={testState === 'testing' || !ai.apiKeys[ai.provider]}
                             className="flex items-center gap-1.5 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-40 transition whitespace-nowrap">
                             {testState === 'testing'

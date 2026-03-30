@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..shared.config import settings
 from ..shared.database import get_db
+from ..shared.redis_client import get_redis
 from ..shared.schemas import StandardResponse
 from ..shared.security import get_current_user, require_roles
 from .models import CopilotConversation, CopilotMessage, LLMCallLog, TrainingJob, TrainingSchedule
@@ -60,6 +61,11 @@ class MessageResponse(BaseModel):
     sources: Optional[List[dict]]
     created_at: datetime
     model_config = {"from_attributes": True}
+
+
+class SaveAPIKeyRequest(BaseModel):
+    provider: str
+    api_key: str
 
 
 class TrainConfig(BaseModel):
@@ -504,6 +510,28 @@ async def _reschedule_tenant(tenant_id: str, sched_row: "TrainingSchedule"):
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+@router.post("/config/api-key", response_model=StandardResponse[dict])
+async def save_api_key(
+    body: SaveAPIKeyRequest,
+    current_user=Depends(require_roles("admin")),
+):
+    """
+    Persist a provider API key server-side (Redis) for this tenant.
+    Called from Settings → AI & LLM when the user saves their key.
+    The chat endpoint automatically falls back to this cached key when
+    the client doesn't send an explicit api_key in the request.
+    """
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    redis_key = f"tenant:{tid}:ai_key:{body.provider}"
+    try:
+        r = await get_redis()
+        await r.set(redis_key, body.api_key.strip())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to cache API key: {exc}")
+    return StandardResponse.ok({"saved": True, "provider": body.provider})
+
+
 @router.post("/chat", response_model=StandardResponse[ChatResponse])
 async def chat(
     body: ChatRequest,
@@ -544,6 +572,27 @@ async def chat(
     else:
         resolved_model = body.model
 
+    # ── API key resolution ──────────────────────────────────────────────────
+    # 1. Use key sent in this request (client-side store)
+    # 2. Fall back to tenant-cached key in Redis (saved via /copilot/config/api-key)
+    # 3. Fall back to server-side env var (ANTHROPIC_API_KEY etc.)
+    redis_key = f"tenant:{tid}:ai_key:{body.provider}"
+    resolved_api_key = body.api_key
+    if resolved_api_key:
+        # Cache the key so future requests without an explicit key still work
+        try:
+            r = await get_redis()
+            await r.set(redis_key, resolved_api_key)  # no TTL — persists until overwritten
+        except Exception:
+            pass  # Redis failure is non-fatal
+    else:
+        # Look up cached key
+        try:
+            r = await get_redis()
+            resolved_api_key = await r.get(redis_key) or None
+        except Exception:
+            pass
+
     t0 = time.time()
     call_status = "pass"
     error_msg = None
@@ -555,7 +604,7 @@ async def chat(
             conversation_history=history,
             model=resolved_model,
             provider=body.provider,
-            api_key=body.api_key,
+            api_key=resolved_api_key,
         )
     except Exception as exc:
         call_status = "fail"
