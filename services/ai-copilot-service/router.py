@@ -847,6 +847,7 @@ async def chat(
     call_status = "pass"
     error_msg = None
     result_data: dict = {}
+    llm_exc: Exception | None = None
     try:
         result_data = await rag_pipeline.answer_question(
             tenant_id=str(tid),
@@ -860,26 +861,31 @@ async def chat(
     except Exception as exc:
         call_status = "fail"
         error_msg = str(exc)
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
-    finally:
-        latency_ms = int((time.time() - t0) * 1000)
-        from .rag import PROVIDER_COSTS
-        tok_in  = result_data.get("tokens_input",  0) if result_data else 0
-        tok_out = result_data.get("tokens_output", 0) if result_data else 0
-        cost    = (tok_in + tok_out) / 1000 * PROVIDER_COSTS.get(body.provider, 0.0)
-        db.add(LLMCallLog(
-            tenant_id=tid,
-            user_id=uid,
-            conversation_id=conversation.id,
-            provider=body.provider,
-            model_name=resolved_model,
-            tokens_input=tok_in,
-            tokens_output=tok_out,
-            latency_ms=latency_ms,
-            status=call_status,
-            error_message=error_msg,
-            cost_usd=cost,
-        ))
+        llm_exc = exc
+
+    # Always persist the call log — commit immediately so a fail path doesn't lose it
+    latency_ms = int((time.time() - t0) * 1000)
+    from .rag import PROVIDER_COSTS
+    tok_in  = result_data.get("tokens_input",  0) if result_data else 0
+    tok_out = result_data.get("tokens_output", 0) if result_data else 0
+    cost    = (tok_in + tok_out) / 1000 * PROVIDER_COSTS.get(body.provider, 0.0)
+    db.add(LLMCallLog(
+        tenant_id=tid,
+        user_id=uid,
+        conversation_id=conversation.id,
+        provider=body.provider,
+        model_name=resolved_model,
+        tokens_input=tok_in,
+        tokens_output=tok_out,
+        latency_ms=latency_ms,
+        status=call_status,
+        error_message=error_msg,
+        cost_usd=cost,
+    ))
+    await db.commit()  # commit log (and conversation) before any raise
+
+    if llm_exc is not None:
+        raise HTTPException(status_code=502, detail=f"LLM error: {llm_exc}") from llm_exc
 
     db.add(CopilotMessage(tenant_id=tid, conversation_id=conversation.id,
                           role="user", content=body.message))

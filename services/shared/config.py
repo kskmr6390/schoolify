@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_TENANT_PER_MINUTE: int = 1000
 
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000", "https://app.schoolify.com"]
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000", "http://localhost:8081", "https://app.schoolify.com"]
 
     # AI / LLM
     # AI_COPILOT_ENABLED=false disables the AI service entirely (saves ~90 MB RAM + Ollama)

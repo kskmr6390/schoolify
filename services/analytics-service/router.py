@@ -717,10 +717,18 @@ async def llm_usage_analytics(
     since = date.today() - timedelta(days=days - 1)
 
     rows = (await db.execute(text("""
-        SELECT log_date, provider, model_name,
-               query_count, tokens_input, tokens_output, cost_usd
-        FROM   llm_usage_logs
-        WHERE  tenant_id = :tid AND log_date >= :since
+        SELECT DATE(created_at)                  AS log_date,
+               provider,
+               model_name,
+               COUNT(*)                          AS query_count,
+               COALESCE(SUM(tokens_input),  0)   AS tokens_input,
+               COALESCE(SUM(tokens_output), 0)   AS tokens_output,
+               COALESCE(SUM(cost_usd),      0.0) AS cost_usd
+        FROM   llm_call_logs
+        WHERE  tenant_id = :tid
+          AND  created_at >= :since
+          AND  status = 'pass'
+        GROUP  BY DATE(created_at), provider, model_name
         ORDER  BY log_date, provider
     """), {"tid": tid, "since": since})).fetchall()
 

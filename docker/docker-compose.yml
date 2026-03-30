@@ -133,7 +133,7 @@ services:
       ASSIGNMENT_SERVICE_URL: http://assignment-service:8008
       ANALYTICS_SERVICE_URL: http://analytics-service:8009
       AI_COPILOT_SERVICE_URL: http://ai-copilot-service:8010
-      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000"]'
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000","http://localhost:8081"]'
     volumes:
       - ../services/api-gateway:/app/services/api_gateway
       - ../services/shared:/app/services/shared

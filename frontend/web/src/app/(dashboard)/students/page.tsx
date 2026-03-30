@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, Upload, Download, X, Loader2, ChevronLeft, ChevronRight, CreditCard } from 'lucide-react'
+import { Plus, Search, Upload, Download, X, Loader2, ChevronLeft, ChevronRight, CreditCard, Pencil } from 'lucide-react'
 import Link from 'next/link'
 import api from '../../../lib/api'
 import { formatDate, cn } from '../../../lib/utils'
@@ -155,6 +155,118 @@ function AddStudentModal({ onClose, classes, onCreated }: { onClose: () => void;
   )
 }
 
+function EditStudentModal({ student, onClose, classes }: { student: any; onClose: () => void; classes: any[] }) {
+  const qc = useQueryClient()
+  const [form, setForm] = useState({
+    first_name: student.first_name || '',
+    last_name: student.last_name || '',
+    gender: student.gender || '',
+    dob: student.dob || '',
+    enrollment_date: student.enrollment_date || '',
+    class_id: student.class_id || '',
+    roll_number: student.roll_number ? String(student.roll_number) : '',
+    blood_group: student.blood_group || '',
+    status: student.status || 'active',
+  })
+  const [error, setError] = useState('')
+
+  const update = useMutation({
+    mutationFn: () => api.patch(`/api/v1/students/${student.id}`, {
+      first_name: form.first_name,
+      last_name: form.last_name,
+      gender: form.gender || undefined,
+      dob: form.dob || undefined,
+      enrollment_date: form.enrollment_date || undefined,
+      class_id: form.class_id || undefined,
+      roll_number: form.roll_number ? Number(form.roll_number) : undefined,
+      blood_group: form.blood_group || undefined,
+      status: form.status,
+    }) as any,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['students'] })
+      onClose()
+    },
+    onError: (e: any) => setError(e.message || 'Failed to update student'),
+  })
+
+  const f = (field: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(p => ({ ...p, [field]: e.target.value }))
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <h2 className="text-lg font-semibold text-gray-900">Edit Student</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <div className="p-6 space-y-5">
+          {error && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
+          <div className="grid grid-cols-2 gap-3">
+            {([['first_name','First Name *'],['last_name','Last Name *']] as [string,string][]).map(([k,l]) => (
+              <div key={k}>
+                <label className="block text-xs font-medium text-gray-600 mb-1">{l}</label>
+                <input value={(form as any)[k]} onChange={f(k)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            ))}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Gender</label>
+              <select value={form.gender} onChange={f('gender')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select</option>
+                <option value="male">Male</option>
+                <option value="female">Female</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date of Birth</label>
+              <input type="date" value={form.dob} onChange={f('dob')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Enrollment Date</label>
+              <input type="date" value={form.enrollment_date} onChange={f('enrollment_date')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Class</label>
+              <select value={form.class_id} onChange={f('class_id')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">No class assigned</option>
+                {classes.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Roll Number</label>
+              <input type="number" value={form.roll_number} onChange={f('roll_number')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Blood Group</label>
+              <select value={form.blood_group} onChange={f('blood_group')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Unknown</option>
+                {['A+','A-','B+','B-','AB+','AB-','O+','O-'].map(g => <option key={g}>{g}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+              <select value={form.status} onChange={f('status')} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                {['active','inactive','graduated','transferred','suspended'].map(s => (
+                  <option key={s} value={s}>{s.charAt(0).toUpperCase()+s.slice(1)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3 px-6 py-4 bg-gray-50 rounded-b-2xl border-t border-gray-100">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-white transition">Cancel</button>
+          <button onClick={() => update.mutate()} disabled={update.isPending || !form.first_name || !form.last_name}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+            {update.isPending && <Loader2 className="animate-spin" size={16} />}
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function StudentsPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
@@ -164,6 +276,7 @@ export default function StudentsPage() {
   const [showModal, setShowModal] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [idCardStudent, setIdCardStudent] = useState<any>(null)
+  const [editStudent, setEditStudent] = useState<any>(null)
 
   const exportStudents = () => {
     downloadCSV('students',
@@ -207,6 +320,7 @@ export default function StudentsPage() {
   return (
     <div>
       {showModal && <AddStudentModal onClose={() => setShowModal(false)} classes={classes} onCreated={(s) => { setShowModal(false); setIdCardStudent(s) }} />}
+      {editStudent && <EditStudentModal student={editStudent} classes={classes} onClose={() => setEditStudent(null)} />}
       {idCardStudent && <IDCardModal person={idCardStudent} role="student" onClose={() => setIdCardStudent(null)} />}
       {showImport && (
         <ImportCSVModal
@@ -318,10 +432,16 @@ export default function StudentsPage() {
                   </td>
                   <td className="px-4 py-3 text-gray-500">{formatDate(s.enrollment_date)}</td>
                   <td className="px-4 py-3">
-                    <button onClick={() => setIdCardStudent({ ...s, class_name: cls?.name })}
-                      className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="ID Card">
-                      <CreditCard size={15} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setEditStudent(s)}
+                        className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="Edit">
+                        <Pencil size={15} />
+                      </button>
+                      <button onClick={() => setIdCardStudent({ ...s, class_name: cls?.name })}
+                        className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition" title="ID Card">
+                        <CreditCard size={15} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )
