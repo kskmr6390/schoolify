@@ -7,6 +7,7 @@ import {
   Users, GraduationCap, UserCog, Download, Search,
 } from 'lucide-react'
 import api from '../../../lib/api'
+import { downloadCSV } from '../../../lib/csvExport'
 
 type AttendanceStatus = 'present' | 'absent' | 'late' | 'excused'
 type TabType = 'students' | 'teachers' | 'staff'
@@ -617,6 +618,33 @@ export default function AttendancePage() {
   const [tab, setTab] = useState<TabType>('students')
   const [view, setView] = useState<ViewType>('grid')
 
+  const exportAttendance = async () => {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = now.getMonth()
+    const daysInMonth = new Date(year, month + 1, 0).getDate()
+    const fromDate = `${year}-${String(month + 1).padStart(2, '0')}-01`
+    const toDate   = `${year}-${String(month + 1).padStart(2, '0')}-${daysInMonth}`
+    try {
+      const res = await api.get(`/api/v1/attendance/summary?from_date=${fromDate}&to_date=${toDate}`) as any
+      const summary = res?.data ?? {}
+      const rows = Object.entries(summary).map(([date, s]: [string, any]) => [
+        date,
+        s?.present ?? 0,
+        s?.absent ?? 0,
+        s?.late ?? 0,
+        s?.excused ?? 0,
+        s?.total ?? 0,
+        s?.total ? `${Math.round((s.present / s.total) * 100)}%` : '—',
+      ])
+      downloadCSV(
+        `attendance-${tab}-${year}-${String(month + 1).padStart(2, '0')}`,
+        ['Date', 'Present', 'Absent', 'Late', 'Excused', 'Total', 'Rate'],
+        rows,
+      )
+    } catch {/* silently ignore */ }
+  }
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <div className="flex items-center justify-between">
@@ -624,7 +652,7 @@ export default function AttendancePage() {
           <h1 className="text-2xl font-bold text-gray-900">Attendance</h1>
           <p className="text-sm text-gray-500 mt-1">Track and manage daily attendance</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+        <button onClick={exportAttendance} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
           <Download size={15} />
           Export
         </button>

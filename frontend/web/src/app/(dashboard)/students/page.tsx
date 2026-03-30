@@ -2,11 +2,13 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Search, Upload, X, Loader2, ChevronLeft, ChevronRight, CreditCard } from 'lucide-react'
+import { Plus, Search, Upload, Download, X, Loader2, ChevronLeft, ChevronRight, CreditCard } from 'lucide-react'
 import Link from 'next/link'
 import api from '../../../lib/api'
 import { formatDate, cn } from '../../../lib/utils'
 import IDCardModal from '../../../components/IDCardModal'
+import ImportCSVModal from '../../../components/ImportCSVModal'
+import { downloadCSV } from '../../../lib/csvExport'
 
 const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-100 text-green-700',
@@ -154,12 +156,32 @@ function AddStudentModal({ onClose, classes, onCreated }: { onClose: () => void;
 }
 
 export default function StudentsPage() {
+  const qc = useQueryClient()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [classFilter, setClassFilter] = useState('')
   const [page, setPage] = useState(1)
   const [showModal, setShowModal] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [idCardStudent, setIdCardStudent] = useState<any>(null)
+
+  const exportStudents = () => {
+    downloadCSV('students',
+      ['Name', 'Student Code', 'Class', 'Roll No', 'Gender', 'Status', 'Enrolled'],
+      students.map(s => {
+        const cls = classes.find((c: any) => c.id === s.class_id)
+        return [
+          `${s.first_name} ${s.last_name}`,
+          s.student_code,
+          cls?.name ?? '',
+          s.roll_number ?? '',
+          s.gender ?? '',
+          s.status,
+          s.enrollment_date,
+        ]
+      }),
+    )
+  }
 
   const { data: classData } = useQuery({
     queryKey: ['classes'],
@@ -186,6 +208,27 @@ export default function StudentsPage() {
     <div>
       {showModal && <AddStudentModal onClose={() => setShowModal(false)} classes={classes} onCreated={(s) => { setShowModal(false); setIdCardStudent(s) }} />}
       {idCardStudent && <IDCardModal person={idCardStudent} role="student" onClose={() => setIdCardStudent(null)} />}
+      {showImport && (
+        <ImportCSVModal
+          config={{
+            title: 'Import Students',
+            description: 'Bulk import students from a CSV file',
+            templateFilename: 'students',
+            fields: [
+              { key: 'first_name', label: 'First Name', required: true, example: 'Riya' },
+              { key: 'last_name',  label: 'Last Name',  required: true, example: 'Sharma' },
+              { key: 'dob',        label: 'Date of Birth (YYYY-MM-DD)', example: '2010-05-14' },
+              { key: 'gender',     label: 'Gender (male/female/other)',  example: 'female' },
+              { key: 'roll_number',label: 'Roll Number', example: '12' },
+              { key: 'blood_group',label: 'Blood Group', example: 'B+' },
+            ],
+            uploadEndpoint: '/api/v1/students/bulk-import',
+            queryParams: classFilter ? { class_id: classFilter } : undefined,
+          }}
+          onClose={() => setShowImport(false)}
+          onSuccess={() => qc.invalidateQueries({ queryKey: ['students'] })}
+        />
+      )}
 
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -193,7 +236,12 @@ export default function StudentsPage() {
           <p className="text-gray-500 text-sm mt-1">{total} total students</p>
         </div>
         <div className="flex gap-2">
-          <button className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition">
+          <button onClick={exportStudents}
+            className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition">
+            <Download size={15} /> Export CSV
+          </button>
+          <button onClick={() => setShowImport(true)}
+            className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 transition">
             <Upload size={15} /> Import CSV
           </button>
           <button onClick={() => setShowModal(true)}
