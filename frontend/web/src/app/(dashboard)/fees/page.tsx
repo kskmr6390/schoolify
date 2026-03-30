@@ -2,11 +2,14 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+
 import {
   CreditCard, Plus, X, Loader2, Search, FileText,
   CheckCircle2, AlertCircle, Clock, IndianRupee, Receipt,
+  Eye, RefreshCw, Trash2,
 } from 'lucide-react'
 import api from '../../../lib/api'
+import FeeReceiptModal, { type FeeReceiptData, type ReceiptTemplate } from '../../../components/FeeReceiptModal'
 
 const STATUS_STYLES: Record<string, string> = {
   draft:   'bg-gray-100 text-gray-600',
@@ -274,11 +277,69 @@ function RecordPaymentModal({ invoice, onClose }: { invoice: any; onClose: () =>
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function FeesPage() {
+  const qc = useQueryClient()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [showGenerate, setShowGenerate] = useState(false)
   const [paymentInvoice, setPaymentInvoice] = useState<any>(null)
+  const [receiptData, setReceiptData] = useState<FeeReceiptData | null>(null)
   const [page, setPage] = useState(1)
+
+  // Fetch school settings for template + school info
+  const { data: settings } = useQuery({
+    queryKey: ['school-settings'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/settings')
+      return (res as any)?.data ?? {}
+    },
+  })
+  const preferredTemplate: ReceiptTemplate = (settings?.receipt_template as ReceiptTemplate) ?? 'classic'
+
+  const generateReceipt = useMutation({
+    mutationFn: (inv: any) =>
+      api.post('/api/v1/fees/receipts/generate', {
+        student_id: inv.student_id,
+        invoice_ids: [inv.id],
+        template: preferredTemplate,
+      }) as any,
+    onSuccess: (res: any, inv: any) => {
+      const r = (res as any)?.data
+      setReceiptData({
+        receipt_number: r.receipt_number,
+        template: r.template ?? preferredTemplate,
+        is_clubbed: false,
+        total_amount: Number(r.total_amount),
+        paid_amount: Number(r.paid_amount),
+        notes: r.notes,
+        created_at: r.created_at,
+        invoices: (r.invoices ?? []).map((i: any) => ({
+          id: i.id,
+          invoice_number: i.invoice_number,
+          issued_date: i.issued_date,
+          due_date: i.due_date,
+          items: (i.items ?? []).map((item: any) => ({
+            description: item.description,
+            amount: Number(item.amount),
+            quantity: item.quantity ?? 1,
+          })),
+          total_amount: Number(i.total_amount),
+          paid_amount: Number(i.paid_amount),
+          discount_amount: Number(i.discount_amount ?? 0),
+          late_fee: Number(i.late_fee ?? 0),
+        })),
+        student: {
+          name: inv.student_name ?? inv.student_id?.slice(0, 8),
+          student_code: inv.student_code ?? '',
+        },
+        school: {
+          name: settings?.school_name ?? 'School',
+          address: settings?.school_address,
+          phone: settings?.school_phone,
+          email: settings?.school_email,
+        },
+      })
+    },
+  })
 
   const { data, isLoading } = useQuery({
     queryKey: ['invoices', search, statusFilter, page],
@@ -305,6 +366,7 @@ export default function FeesPage() {
     <div className="space-y-6">
       {showGenerate && <GenerateInvoiceModal onClose={() => setShowGenerate(false)} />}
       {paymentInvoice && <RecordPaymentModal invoice={paymentInvoice} onClose={() => setPaymentInvoice(null)} />}
+      {receiptData && <FeeReceiptModal data={receiptData} onClose={() => setReceiptData(null)} />}
 
       <div className="flex items-center justify-between">
         <div>
@@ -370,7 +432,7 @@ export default function FeesPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  {['Invoice #', 'Student', 'Total', 'Balance', 'Due Date', 'Status', 'Actions'].map(h => (
+                  {['Invoice #', 'Student', 'Total', 'Balance', 'Due Date', 'Status', 'Receipt', 'Actions'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
@@ -398,6 +460,17 @@ export default function FeesPage() {
                           <StatusIcon size={10} />
                           {statusKey}
                         </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => generateReceipt.mutate(inv)}
+                          disabled={generateReceipt.isPending}
+                          title="Generate / View Receipt"
+                          className="flex items-center gap-1 text-xs px-2.5 py-1 bg-violet-50 text-violet-700 rounded-lg hover:bg-violet-100 transition font-medium disabled:opacity-40"
+                        >
+                          {generateReceipt.isPending ? <Loader2 size={11} className="animate-spin" /> : <Receipt size={11} />}
+                          Receipt
+                        </button>
                       </td>
                       <td className="px-4 py-3">
                         {balanceDue > 0 && (

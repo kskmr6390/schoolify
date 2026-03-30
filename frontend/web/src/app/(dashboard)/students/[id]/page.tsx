@@ -5,12 +5,15 @@ import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft, User, Phone, Mail, Calendar, MapPin, BookOpen,
   ClipboardCheck, CreditCard, FileText, Award, AlertCircle,
-  CheckCircle, Clock, TrendingUp, Download, Eye,
+  CheckCircle, Clock, TrendingUp, Download, Eye, Receipt,
+  Trash2, RefreshCw, CheckSquare, Square, Layers, X, Loader2,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '../../../../lib/api'
 import { formatDate, formatCurrency, ATTENDANCE_STATUS_COLORS, INVOICE_STATUS_COLORS } from '../../../../lib/utils'
+import FeeReceiptModal, { type FeeReceiptData, type ReceiptTemplate } from '../../../../components/FeeReceiptModal'
 
 type TabKey = 'overview' | 'attendance' | 'results' | 'fees' | 'documents'
 
@@ -264,8 +267,15 @@ function ResultsTab({ studentId }: { studentId: string }) {
 }
 
 // ─── Fees Tab ─────────────────────────────────────────────────────────────────
-function FeesTab({ studentId }: { studentId: string }) {
-  const { data: invoices } = useQuery({
+function FeesTab({ studentId, student }: { studentId: string; student: any }) {
+  const qc = useQueryClient()
+  const [clubMode, setClubMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [receiptData, setReceiptData] = useState<FeeReceiptData | null>(null)
+  const [actionError, setActionError] = useState('')
+
+  // Fetch invoices
+  const { data: invoices, isLoading: invLoading } = useQuery({
     queryKey: ['student-invoices', studentId],
     queryFn: async () => {
       const res = await api.get(`/api/v1/fees/invoices`, { params: { student_id: studentId, per_page: 50 } })
@@ -273,16 +283,116 @@ function FeesTab({ studentId }: { studentId: string }) {
     },
   })
 
+  // Fetch existing receipts
+  const { data: receipts, isLoading: rcptLoading } = useQuery({
+    queryKey: ['student-receipts', studentId],
+    queryFn: async () => {
+      const res = await api.get(`/api/v1/fees/receipts/student/${studentId}`)
+      return (res as any)?.data ?? []
+    },
+  })
+
+  // Fetch school settings for template preference
+  const { data: settings } = useQuery({
+    queryKey: ['school-settings'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/settings')
+      return (res as any)?.data ?? {}
+    },
+  })
+
   const list: any[] = Array.isArray(invoices) ? invoices : []
-  const totalDue = list.reduce((acc, inv) => acc + (inv.amount_due ?? 0), 0)
-  const totalPaid = list.reduce((acc, inv) => acc + (inv.amount_paid ?? 0), 0)
-  const totalOutstanding = list.reduce((acc, inv) => acc + (inv.outstanding_amount ?? 0), 0)
+  const receiptList: any[] = Array.isArray(receipts) ? receipts : []
+  const preferredTemplate: ReceiptTemplate = (settings?.receipt_template as ReceiptTemplate) ?? 'classic'
+
+  const totalBilled = list.reduce((acc, inv) => acc + Number(inv.total_amount ?? 0), 0)
+  const totalPaid = list.reduce((acc, inv) => acc + Number(inv.paid_amount ?? 0), 0)
+  const totalOutstanding = totalBilled - totalPaid
+
+  // Receipt lookup by invoice id
+  const receiptByInvoiceId: Record<string, any> = {}
+  receiptList.forEach(r => {
+    (r.invoice_ids ?? []).forEach((id: string) => { receiptByInvoiceId[id] = r })
+  })
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
+
+  // Build FeeReceiptData from api response
+  const buildReceiptData = (receiptResp: any): FeeReceiptData => ({
+    receipt_number: receiptResp.receipt_number,
+    template: receiptResp.template ?? preferredTemplate,
+    is_clubbed: receiptResp.is_clubbed,
+    total_amount: Number(receiptResp.total_amount),
+    paid_amount: Number(receiptResp.paid_amount),
+    notes: receiptResp.notes,
+    created_at: receiptResp.created_at,
+    invoices: (receiptResp.invoices ?? []).map((inv: any) => ({
+      id: inv.id,
+      invoice_number: inv.invoice_number,
+      issued_date: inv.issued_date,
+      due_date: inv.due_date,
+      items: (inv.items ?? []).map((item: any) => ({
+        description: item.description,
+        amount: Number(item.amount),
+        quantity: item.quantity ?? 1,
+      })),
+      total_amount: Number(inv.total_amount),
+      paid_amount: Number(inv.paid_amount),
+      discount_amount: Number(inv.discount_amount ?? 0),
+      late_fee: Number(inv.late_fee ?? 0),
+      notes: inv.notes,
+    })),
+    student: {
+      name: student ? `${student.first_name} ${student.last_name}` : '',
+      student_code: student?.student_code ?? '',
+      class_name: student?.class_name ?? student?.class?.name,
+      roll_number: student?.roll_number,
+    },
+    school: {
+      name: settings?.school_name ?? 'School',
+      address: settings?.school_address,
+      phone: settings?.school_phone,
+      email: settings?.school_email,
+    },
+  })
+
+  // Generate receipt mutation
+  const generateReceipt = useMutation({
+    mutationFn: (invoiceIds: string[]) =>
+      api.post('/api/v1/fees/receipts/generate', {
+        student_id: studentId,
+        invoice_ids: invoiceIds,
+        template: preferredTemplate,
+      }) as any,
+    onSuccess: (res: any) => {
+      qc.invalidateQueries({ queryKey: ['student-receipts', studentId] })
+      setReceiptData(buildReceiptData((res as any)?.data))
+      setClubMode(false)
+      setSelectedIds([])
+    },
+    onError: (e: any) => setActionError(e.response?.data?.detail || 'Failed to generate receipt'),
+  })
+
+  // Delete receipt mutation
+  const deleteReceipt = useMutation({
+    mutationFn: (receiptId: string) => (api as any).delete(`/api/v1/fees/receipts/${receiptId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['student-receipts', studentId] }),
+    onError: (e: any) => setActionError(e.response?.data?.detail || 'Failed to delete receipt'),
+  })
+
+  const openExistingReceipt = (receipt: any) => setReceiptData(buildReceiptData(receipt))
 
   return (
     <div className="space-y-6">
+      {receiptData && (
+        <FeeReceiptModal data={receiptData} onClose={() => setReceiptData(null)} />
+      )}
+
+      {/* Summary */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { label: 'Total Billed', value: formatCurrency(totalDue), color: 'text-indigo-600', bg: 'bg-indigo-50' },
+          { label: 'Total Billed', value: formatCurrency(totalBilled), color: 'text-indigo-600', bg: 'bg-indigo-50' },
           { label: 'Total Paid', value: formatCurrency(totalPaid), color: 'text-green-600', bg: 'bg-green-50' },
           { label: 'Outstanding', value: formatCurrency(totalOutstanding), color: totalOutstanding > 0 ? 'text-red-600' : 'text-green-600', bg: totalOutstanding > 0 ? 'bg-red-50' : 'bg-green-50' },
         ].map(card => (
@@ -293,48 +403,209 @@ function FeesTab({ studentId }: { studentId: string }) {
         ))}
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h4 className="font-semibold text-gray-900">Invoices</h4>
-          <span className="text-xs text-gray-400">{list.length} invoices</span>
+      {actionError && (
+        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+          <AlertCircle size={14} /> {actionError}
+          <button onClick={() => setActionError('')} className="ml-auto"><X size={14} /></button>
         </div>
-        {list.length === 0 ? (
+      )}
+
+      {/* Invoices table */}
+      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h4 className="font-semibold text-gray-900">Invoices</h4>
+            <span className="text-xs text-gray-400">{list.length} invoices</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {clubMode ? (
+              <>
+                <span className="text-xs text-indigo-600 font-medium">{selectedIds.length} selected</span>
+                <button
+                  onClick={() => { generateReceipt.mutate(selectedIds) }}
+                  disabled={selectedIds.length < 2 || generateReceipt.isPending}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium disabled:opacity-40 hover:bg-indigo-700 transition"
+                >
+                  {generateReceipt.isPending ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+                  Club & Generate
+                </button>
+                <button
+                  onClick={() => { setClubMode(false); setSelectedIds([]) }}
+                  className="p-1.5 hover:bg-gray-100 rounded-lg transition"
+                >
+                  <X size={14} className="text-gray-500" />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setClubMode(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50 transition"
+              >
+                <Layers size={12} /> Club Fees
+              </button>
+            )}
+          </div>
+        </div>
+
+        {clubMode && (
+          <div className="px-5 py-2.5 bg-indigo-50 border-b border-indigo-100 text-xs text-indigo-700 flex items-center gap-2">
+            <Layers size={12} />
+            Select 2 or more invoices to combine into a single clubbed receipt (e.g. Jan + Feb, or Tuition + Transport).
+          </div>
+        )}
+
+        {invLoading ? (
+          <div className="flex items-center justify-center gap-2 h-32 text-gray-400">
+            <Loader2 size={16} className="animate-spin" /> Loading invoices...
+          </div>
+        ) : list.length === 0 ? (
           <div className="p-8 text-center text-sm text-gray-400">No invoices found</div>
         ) : (
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
+                {clubMode && <th className="w-10 px-4 py-3" />}
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Invoice #</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Due Date</th>
                 <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Amount</th>
                 <th className="text-right px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Paid</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Status</th>
+                <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase">Receipt</th>
                 <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {list.map((inv: any) => (
-                <tr key={inv.id} className="hover:bg-gray-50">
-                  <td className="px-5 py-3 text-sm font-mono text-gray-700">{inv.invoice_number ?? inv.id?.slice(0,8)}</td>
-                  <td className="px-5 py-3 text-sm text-gray-500">{formatDate(inv.due_date)}</td>
-                  <td className="px-5 py-3 text-sm text-gray-900 text-right font-medium">{formatCurrency(inv.amount_due ?? 0)}</td>
-                  <td className="px-5 py-3 text-sm text-green-600 text-right">{formatCurrency(inv.amount_paid ?? 0)}</td>
-                  <td className="px-5 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize ${INVOICE_STATUS_COLORS[inv.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                      {inv.status}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3">
-                    <button className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1">
-                      <Eye size={12} /> View
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {list.map((inv: any) => {
+                const existingReceipt = receiptByInvoiceId[inv.id]
+                const isSelected = selectedIds.includes(inv.id)
+                const balance = Number(inv.total_amount ?? 0) - Number(inv.paid_amount ?? 0)
+                return (
+                  <tr key={inv.id} className={`hover:bg-gray-50 transition-colors ${isSelected ? 'bg-indigo-50' : ''}`}>
+                    {clubMode && (
+                      <td className="px-4 py-3">
+                        <button onClick={() => toggleSelect(inv.id)} className="text-indigo-600 hover:text-indigo-800">
+                          {isSelected ? <CheckSquare size={16} /> : <Square size={16} className="text-gray-400" />}
+                        </button>
+                      </td>
+                    )}
+                    <td className="px-5 py-3 text-sm font-mono text-gray-700">{inv.invoice_number ?? inv.id?.slice(0,8)}</td>
+                    <td className="px-5 py-3 text-sm text-gray-500">{formatDate(inv.due_date)}</td>
+                    <td className="px-5 py-3 text-sm text-gray-900 text-right font-medium">{formatCurrency(Number(inv.total_amount ?? 0))}</td>
+                    <td className="px-5 py-3 text-sm text-green-600 text-right">{formatCurrency(Number(inv.paid_amount ?? 0))}</td>
+                    <td className="px-5 py-3">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize ${INVOICE_STATUS_COLORS[inv.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {inv.status}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3">
+                      {existingReceipt ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="inline-flex items-center gap-1 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full font-mono">
+                            <Receipt size={10} /> {existingReceipt.receipt_number}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400 italic">Not generated</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-1">
+                        {existingReceipt ? (
+                          <>
+                            <button
+                              onClick={() => openExistingReceipt(existingReceipt)}
+                              title="View Receipt"
+                              className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-600 transition"
+                            >
+                              <Eye size={13} />
+                            </button>
+                            <button
+                              onClick={() => generateReceipt.mutate([inv.id])}
+                              title="Regenerate Receipt"
+                              disabled={generateReceipt.isPending}
+                              className="p-1.5 rounded-lg hover:bg-amber-50 text-amber-600 transition disabled:opacity-40"
+                            >
+                              <RefreshCw size={13} />
+                            </button>
+                            <button
+                              onClick={() => deleteReceipt.mutate(existingReceipt.id)}
+                              title="Delete Receipt"
+                              disabled={deleteReceipt.isPending}
+                              className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition disabled:opacity-40"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => generateReceipt.mutate([inv.id])}
+                            disabled={generateReceipt.isPending}
+                            className="flex items-center gap-1 text-xs px-2.5 py-1 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition font-medium disabled:opacity-40"
+                          >
+                            {generateReceipt.isPending ? <Loader2 size={11} className="animate-spin" /> : <Receipt size={11} />}
+                            Generate
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Existing Receipts list */}
+      {receiptList.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+            <h4 className="font-semibold text-gray-900">Generated Receipts</h4>
+            <span className="text-xs text-gray-400">{receiptList.length} receipts</span>
+          </div>
+          {rcptLoading ? (
+            <div className="flex items-center justify-center gap-2 h-20 text-gray-400">
+              <Loader2 size={16} className="animate-spin" />
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-50">
+              {receiptList.map((r: any) => (
+                <div key={r.id} className="flex items-center gap-4 px-5 py-3 hover:bg-gray-50 transition-colors">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                    <Receipt size={15} className="text-indigo-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 font-mono">{r.receipt_number}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {r.is_clubbed ? `Clubbed · ${r.invoice_ids?.length} invoices` : '1 invoice'} ·{' '}
+                      <span className="capitalize">{r.template}</span> template ·{' '}
+                      {formatDate(r.created_at)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-sm font-semibold text-gray-800">{formatCurrency(Number(r.total_amount))}</span>
+                    <button
+                      onClick={() => openExistingReceipt(r)}
+                      className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-600 transition"
+                      title="View"
+                    >
+                      <Eye size={14} />
+                    </button>
+                    <button
+                      onClick={() => deleteReceipt.mutate(r.id)}
+                      disabled={deleteReceipt.isPending}
+                      className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition disabled:opacity-40"
+                      title="Delete"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -618,7 +889,7 @@ export default function StudentDetailPage() {
 
       {activeTab === 'attendance' && <AttendanceTab studentId={id} />}
       {activeTab === 'results' && <ResultsTab studentId={id} />}
-      {activeTab === 'fees' && <FeesTab studentId={id} />}
+      {activeTab === 'fees' && <FeesTab studentId={id} student={student} />}
       {activeTab === 'documents' && <DocumentsTab studentId={id} />}
     </div>
   )

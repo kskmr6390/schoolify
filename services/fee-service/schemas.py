@@ -111,3 +111,30 @@ class StudentFeeStatement(BaseModel):
     total_paid: Decimal
     total_outstanding: Decimal
     invoices: List[InvoiceResponse]
+
+
+# ── Receipt schemas ────────────────────────────────────────────────────────────
+
+class GenerateReceiptRequest(BaseModel):
+    student_id: UUID
+    invoice_ids: List[UUID]          # one or many (clubbed)
+    template: str = "classic"        # classic | modern | minimal
+    notes: Optional[str] = None
+
+
+class FeeReceiptResponse(BaseModel):
+    id: UUID
+    receipt_number: str
+    student_id: UUID
+    invoice_ids: List[UUID]
+    template: str
+    is_clubbed: bool
+    total_amount: Decimal
+    paid_amount: Decimal
+    notes: Optional[str]
+    generated_by: Optional[UUID]
+    is_deleted: bool
+    created_at: datetime
+    # resolved invoice details for rendering
+    invoices: List[InvoiceResponse] = []
+    model_config = {"from_attributes": True}
