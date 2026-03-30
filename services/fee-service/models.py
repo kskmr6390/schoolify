@@ -108,6 +108,26 @@ class InvoiceItem(Base):
     invoice = relationship("Invoice", back_populates="items")
 
 
+class FeeReceipt(TenantAwareModel):
+    """
+    Generated fee receipt — can cover one invoice or multiple (clubbed).
+    Supports soft-delete so admin can delete and regenerate.
+    """
+    __tablename__ = "fee_receipts"
+
+    receipt_number = Column(String(50), nullable=False)
+    student_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    invoice_ids = Column(JSONB, nullable=False)           # list of invoice UUIDs covered
+    template = Column(String(20), nullable=False, default="classic")  # classic/modern/minimal
+    is_clubbed = Column(Boolean, default=False)           # True when multiple invoices merged
+    total_amount = Column(Numeric(10, 2), nullable=False)
+    paid_amount = Column(Numeric(10, 2), nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+    generated_by = Column(UUID(as_uuid=True), nullable=True)
+    is_deleted = Column(Boolean, default=False)
+    deleted_at = Column(DateTime, nullable=True)
+
+
 class Payment(TenantAwareModel):
     """
     Payment record with idempotency.

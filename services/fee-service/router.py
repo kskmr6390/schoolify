@@ -14,12 +14,12 @@ from ..shared.events import Topics, event_producer
 from ..shared.redis_client import set_with_lock
 from ..shared.schemas import PaginatedResponse, PaginationParams, StandardResponse
 from ..shared.security import get_current_user, require_roles
-from .models import (FeeStructure, Invoice, InvoiceItem, InvoiceStatus,
-                     Payment, PaymentStatus)
+from .models import (FeeReceipt, FeeStructure, Invoice, InvoiceItem,
+                     InvoiceStatus, Payment, PaymentStatus)
 from .schemas import (BulkGenerateInvoicesRequest, CreateInvoiceRequest,
-                      FeeCollectionReport, FeeStructureCreate, FeeStructureResponse,
-                      InvoiceResponse, PaymentResponse, RecordPaymentRequest,
-                      StudentFeeStatement)
+                      FeeCollectionReport, FeeReceiptResponse, FeeStructureCreate,
+                      FeeStructureResponse, GenerateReceiptRequest, InvoiceResponse,
+                      PaymentResponse, RecordPaymentRequest, StudentFeeStatement)
 
 router = APIRouter(prefix="/api/v1/fees", tags=["Fees & Billing"])
 
@@ -337,6 +337,144 @@ async def record_payment(
     )
 
     return StandardResponse.ok(PaymentResponse.model_validate(payment))
+
+
+# ── Fee Receipts ───────────────────────────────────────────────────────────────
+
+@router.post("/receipts/generate", response_model=StandardResponse[FeeReceiptResponse], status_code=201)
+async def generate_receipt(
+    body: GenerateReceiptRequest,
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate or regenerate a fee receipt for one or multiple invoices (clubbed)."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    # Fetch and validate all invoices belong to this tenant + student
+    result = await db.execute(
+        select(Invoice)
+        .options(selectinload(Invoice.items))
+        .where(
+            Invoice.id.in_(body.invoice_ids),
+            Invoice.tenant_id == tid,
+            Invoice.student_id == body.student_id,
+        )
+    )
+    invoices = result.scalars().all()
+
+    if len(invoices) != len(body.invoice_ids):
+        raise HTTPException(status_code=404, detail="One or more invoices not found or don't belong to this student")
+
+    # Soft-delete any existing non-deleted receipts covering the same invoice set
+    existing_res = await db.execute(
+        select(FeeReceipt).where(
+            FeeReceipt.student_id == body.student_id,
+            FeeReceipt.tenant_id == tid,
+            FeeReceipt.is_deleted == False,
+        )
+    )
+    for existing in existing_res.scalars().all():
+        existing_ids = set(str(i) for i in (existing.invoice_ids or []))
+        new_ids = set(str(i) for i in body.invoice_ids)
+        if existing_ids & new_ids:  # overlapping invoices → supersede
+            existing.is_deleted = True
+            existing.deleted_at = datetime.utcnow()
+
+    # Auto-generate receipt number
+    count_res = await db.execute(
+        select(func.count(FeeReceipt.id)).where(FeeReceipt.tenant_id == tid)
+    )
+    count = (count_res.scalar() or 0) + 1
+    year = date.today().year
+    receipt_number = f"RCP-{year}-{count:05d}"
+
+    total_amount = sum(inv.total_amount for inv in invoices)
+    paid_amount = sum(inv.paid_amount for inv in invoices)
+
+    receipt = FeeReceipt(
+        tenant_id=tid,
+        receipt_number=receipt_number,
+        student_id=body.student_id,
+        invoice_ids=[str(i) for i in body.invoice_ids],
+        template=body.template,
+        is_clubbed=len(body.invoice_ids) > 1,
+        total_amount=total_amount,
+        paid_amount=paid_amount,
+        notes=body.notes,
+        generated_by=UUIDT(current_user.user_id),
+    )
+    db.add(receipt)
+    await db.flush()
+    await db.refresh(receipt)
+
+    return StandardResponse.ok(FeeReceiptResponse(
+        **{k: v for k, v in receipt.__dict__.items() if not k.startswith('_')},
+        invoices=[InvoiceResponse.model_validate(inv) for inv in invoices],
+    ))
+
+
+@router.get("/receipts/student/{student_id}", response_model=StandardResponse[list[FeeReceiptResponse]])
+async def get_student_receipts(
+    student_id: UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all non-deleted receipts for a student."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    result = await db.execute(
+        select(FeeReceipt).where(
+            FeeReceipt.student_id == student_id,
+            FeeReceipt.tenant_id == tid,
+            FeeReceipt.is_deleted == False,
+        ).order_by(FeeReceipt.created_at.desc())
+    )
+    receipts = result.scalars().all()
+
+    enriched = []
+    for receipt in receipts:
+        inv_ids = [UUIDT(str(i)) for i in (receipt.invoice_ids or [])]
+        inv_res = await db.execute(
+            select(Invoice).options(selectinload(Invoice.items))
+            .where(Invoice.id.in_(inv_ids))
+        )
+        invoices = inv_res.scalars().all()
+        enriched.append(FeeReceiptResponse(
+            **{k: v for k, v in receipt.__dict__.items() if not k.startswith('_')},
+            invoices=[InvoiceResponse.model_validate(inv) for inv in invoices],
+        ))
+
+    return StandardResponse.ok(enriched)
+
+
+@router.delete("/receipts/{receipt_id}", response_model=StandardResponse[dict])
+async def delete_receipt(
+    receipt_id: UUID,
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-delete a receipt (admin only). Can regenerate after deleting."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    res = await db.execute(
+        select(FeeReceipt).where(
+            FeeReceipt.id == receipt_id,
+            FeeReceipt.tenant_id == tid,
+            FeeReceipt.is_deleted == False,
+        )
+    )
+    receipt = res.scalar_one_or_none()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    receipt.is_deleted = True
+    receipt.deleted_at = datetime.utcnow()
+    await db.flush()
+
+    return StandardResponse.ok({"deleted": True, "receipt_id": str(receipt_id)})
 
 
 @router.get("/reports/collection", response_model=StandardResponse[FeeCollectionReport])

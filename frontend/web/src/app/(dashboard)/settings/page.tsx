@@ -7,7 +7,7 @@ import {
   Shield, Clock, MapPin, Building, Hash,
   AlertCircle, CheckCircle2, Sliders, Brain, Cpu, Play, RefreshCw,
   Eye, EyeOff, Zap, Database, CheckSquare, Square, Terminal,
-  RotateCcw, Calendar, FlaskConical, ChevronUp, Trash2, Download, AlertTriangle,
+  RotateCcw, Calendar, FlaskConical, ChevronUp, Trash2, Download, AlertTriangle, Receipt,
 } from 'lucide-react'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import api from '../../../lib/api'
@@ -84,6 +84,7 @@ const DEFAULTS: Record<string, string> = {
   gpa_enabled: '0',
   rank_in_class: '1',
   // Fees
+  receipt_template: 'classic',
   late_fee_percent: '2',
   late_fee_grace_days: '10',
   partial_payment: '1',
@@ -889,6 +890,134 @@ export default function SettingsPage() {
                       <Field label="Accepted Payment Modes" hint="Comma-separated list of accepted methods">
                         <TextInput value={v(merged, 'payment_modes')} onChange={val => set('payment_modes', val)} placeholder="Cash,UPI,NEFT,Cheque" />
                       </Field>
+                    </div>
+                  </div>
+
+                  {/* Receipt Template Picker */}
+                  <div className="bg-white rounded-xl border border-gray-200 p-6">
+                    <SectionTitle icon={Receipt} title="Receipt Template" subtitle="Choose the design used when generating fee receipts" />
+                    <div className="grid grid-cols-3 gap-4">
+                      {([
+                        {
+                          id: 'classic',
+                          label: 'Classic',
+                          desc: 'Traditional formal receipt with letterhead',
+                          preview: (
+                            <div className="w-full h-full bg-white border border-gray-300 p-2 flex flex-col gap-1">
+                              <div className="h-1.5 bg-gray-800 rounded-sm mx-4" />
+                              <div className="h-1 bg-gray-400 rounded-sm mx-6" />
+                              <div className="h-px bg-gray-300 mt-1 mb-1" />
+                              <div className="flex gap-1">
+                                <div className="flex-1 space-y-0.5">
+                                  <div className="h-0.5 bg-gray-300 rounded" />
+                                  <div className="h-0.5 bg-gray-300 rounded w-3/4" />
+                                </div>
+                                <div className="flex-1 space-y-0.5">
+                                  <div className="h-0.5 bg-gray-300 rounded" />
+                                  <div className="h-0.5 bg-gray-300 rounded w-2/3" />
+                                </div>
+                              </div>
+                              <div className="mt-1 bg-gray-800 rounded-sm h-1.5 flex items-center px-1 gap-2">
+                                <div className="flex-1 h-0.5 bg-white/40 rounded" />
+                                <div className="w-4 h-0.5 bg-white/40 rounded" />
+                              </div>
+                              <div className="space-y-0.5 mt-0.5">
+                                {[1,2,3].map(i => (
+                                  <div key={i} className="flex justify-between">
+                                    <div className="h-0.5 bg-gray-200 rounded flex-1 mr-2" />
+                                    <div className="h-0.5 bg-gray-200 rounded w-4" />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'modern',
+                          label: 'Modern',
+                          desc: 'Colorful gradient header with clean card layout',
+                          preview: (
+                            <div className="w-full h-full bg-white flex flex-col overflow-hidden">
+                              <div className="bg-gradient-to-r from-indigo-600 to-violet-600 p-2 flex-shrink-0">
+                                <div className="h-1.5 bg-white/60 rounded w-16 mb-1" />
+                                <div className="h-0.5 bg-white/40 rounded w-10" />
+                              </div>
+                              <div className="p-2 flex-1 space-y-1.5">
+                                <div className="grid grid-cols-3 gap-1">
+                                  {['bg-gray-100','bg-green-100','bg-red-100'].map(c => (
+                                    <div key={c} className={`${c} rounded h-4`} />
+                                  ))}
+                                </div>
+                                <div className="space-y-0.5">
+                                  {[1,2].map(i => (
+                                    <div key={i} className="flex justify-between border-b border-gray-100 pb-0.5">
+                                      <div className="h-0.5 bg-gray-200 rounded flex-1 mr-2" />
+                                      <div className="h-0.5 bg-gray-300 rounded w-4" />
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'minimal',
+                          label: 'Minimal',
+                          desc: 'Clean, typographic, white-space focused',
+                          preview: (
+                            <div className="w-full h-full bg-white p-2 flex flex-col gap-1.5">
+                              <div className="flex justify-between items-start">
+                                <div className="h-1.5 bg-gray-900 rounded w-12" />
+                                <div className="h-1 bg-gray-400 rounded w-8 font-mono" />
+                              </div>
+                              <div className="h-0.5 bg-gray-900 rounded" />
+                              <div className="flex gap-3">
+                                <div className="space-y-0.5">
+                                  <div className="h-0.5 bg-gray-200 rounded w-8" />
+                                  <div className="h-0.5 bg-gray-400 rounded w-12" />
+                                </div>
+                              </div>
+                              <div className="space-y-0.5 mt-1">
+                                {[1,2,3].map(i => (
+                                  <div key={i} className="flex justify-between border-b border-gray-100 pb-0.5">
+                                    <div className="h-0.5 bg-gray-200 rounded flex-1 mr-2" />
+                                    <div className="h-0.5 bg-gray-300 rounded w-5" />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ),
+                        },
+                      ] as const).map(tmpl => (
+                        <button
+                          key={tmpl.id}
+                          type="button"
+                          onClick={() => set('receipt_template', tmpl.id)}
+                          className={`relative text-left rounded-xl border-2 overflow-hidden transition-all ${
+                            v(merged, 'receipt_template') === tmpl.id
+                              ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                              : 'border-gray-200 hover:border-gray-300'
+                          }`}
+                        >
+                          {/* Miniature preview */}
+                          <div className="h-24 bg-gray-50 border-b border-gray-100 overflow-hidden">
+                            {tmpl.preview}
+                          </div>
+                          <div className="p-3">
+                            <div className="flex items-center justify-between mb-0.5">
+                              <p className="text-sm font-semibold text-gray-900">{tmpl.label}</p>
+                              {v(merged, 'receipt_template') === tmpl.id && (
+                                <div className="w-4 h-4 bg-indigo-600 rounded-full flex items-center justify-center">
+                                  <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 10 8">
+                                    <path d="M1 4l2.5 2.5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                </div>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-400 leading-tight">{tmpl.desc}</p>
+                          </div>
+                        </button>
+                      ))}
                     </div>
                   </div>
 
