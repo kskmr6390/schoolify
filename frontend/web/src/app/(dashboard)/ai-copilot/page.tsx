@@ -266,7 +266,7 @@ export default function AICopilotPage() {
                 </button>
                 {showModelDrop && (
                   <div className="absolute top-full left-0 mt-1 w-52 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1">
-                    {(currentProviderDef.models as any[]).map((m: any) => (
+                    {(currentProviderDef.models as unknown as any[]).map((m: any) => (
                       <button
                         key={m.id}
                         onClick={() => { setModel(provider, m.id); setShowModelDrop(false) }}
