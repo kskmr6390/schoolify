@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { GraduationCap, Plus, Search, X, Loader2, CreditCard, ChevronRight } from 'lucide-react'
+import { GraduationCap, Plus, Search, X, Loader2, CreditCard, ChevronRight, Pencil } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import api from '../../../lib/api'
 import IDCardModal from '../../../components/IDCardModal'
@@ -94,10 +94,91 @@ function AddTeacherModal({ onClose, onCreated }: { onClose: () => void; onCreate
   )
 }
 
+function EditTeacherModal({ teacher, onClose }: { teacher: any; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [form, setForm] = useState({
+    first_name: teacher.first_name || '',
+    last_name: teacher.last_name || '',
+    phone: teacher.phone || '',
+    status: teacher.status || 'active',
+  })
+  const [error, setError] = useState('')
+
+  const update = useMutation({
+    mutationFn: () => api.patch(`/api/v1/auth/users/${teacher.id}`, {
+      first_name: form.first_name,
+      last_name: form.last_name,
+      phone: form.phone || undefined,
+      status: form.status,
+    }) as any,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users', 'teacher'] })
+      onClose()
+    },
+    onError: (e: any) => setError(e.message || 'Failed to update teacher'),
+  })
+
+  const f = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(p => ({ ...p, [k]: e.target.value }))
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <h2 className="text-lg font-semibold text-gray-900">Edit Teacher</h2>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg"><X size={18} /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          {error && <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">{error}</div>}
+          <div className="grid grid-cols-2 gap-3">
+            {([['first_name','First Name *'],['last_name','Last Name *']] as [string,string][]).map(([k,l]) => (
+              <div key={k}>
+                <label className="block text-xs font-medium text-gray-600 mb-1">{l}</label>
+                <input value={(form as any)[k]} onChange={f(k)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              </div>
+            ))}
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Email Address</label>
+            <input value={teacher.email} disabled
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-400 cursor-not-allowed" />
+            <p className="text-xs text-gray-400 mt-1">Email cannot be changed</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Phone</label>
+              <input value={form.phone} onChange={f('phone')} placeholder="+91 98765 00000"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
+              <select value={form.status} onChange={f('status')}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3 px-6 py-4 bg-gray-50 rounded-b-2xl border-t border-gray-100">
+          <button onClick={onClose} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-white transition">Cancel</button>
+          <button onClick={() => update.mutate()} disabled={update.isPending || !form.first_name || !form.last_name}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition">
+            {update.isPending && <Loader2 className="animate-spin" size={16} />}
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TeachersPage() {
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [idCardTeacher, setIdCardTeacher] = useState<any>(null)
+  const [editTeacher, setEditTeacher] = useState<any>(null)
   const router = useRouter()
 
   const { data, isLoading } = useQuery({
@@ -118,6 +199,7 @@ export default function TeachersPage() {
           onCreated={(t) => { setShowModal(false); setIdCardTeacher(t) }}
         />
       )}
+      {editTeacher && <EditTeacherModal teacher={editTeacher} onClose={() => setEditTeacher(null)} />}
       {idCardTeacher && (
         <IDCardModal
           person={idCardTeacher}
@@ -173,6 +255,11 @@ export default function TeachersPage() {
               }`}>
                 {t.status}
               </span>
+              <button onClick={e => { e.stopPropagation(); setEditTeacher(t) }}
+                className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
+                title="Edit">
+                <Pencil size={15} />
+              </button>
               <button onClick={e => { e.stopPropagation(); setIdCardTeacher(t) }}
                 className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
                 title="View ID Card">

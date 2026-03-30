@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus, X, Loader2, Search, UserCog, CreditCard,
-  Briefcase, Phone, Mail, Building2, ChevronRight,
+  Briefcase, Phone, Mail, Building2, ChevronRight, Pencil,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import api from '../../../lib/api'
