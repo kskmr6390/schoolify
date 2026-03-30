@@ -207,46 +207,48 @@ async def _get_tenant_active_model(tenant_id: str, db: AsyncSession) -> str:
 
 
 async def _fetch_tenant_data(tenant_id: str, sources: List[str], db: AsyncSession) -> dict:
-    """Fetch real school data from DB for the selected sources. Skips missing tables gracefully."""
+    """Fetch real school data from DB for training index. Skips missing tables gracefully."""
     data: dict[str, list] = {}
     tid = tenant_id
     table_queries = {
         "students": f"""
             SELECT s.first_name, s.last_name, s.roll_number,
-                   c.name AS class_name, s.gender, s.date_of_birth
+                   c.name AS class_name, s.gender, s.status
             FROM students s LEFT JOIN classes c ON s.class_id = c.id
             WHERE s.tenant_id = '{tid}' LIMIT 500""",
         "attendance": f"""
-            SELECT a.date, a.status,
+            SELECT ar.date, ae.status,
                    s.first_name || ' ' || s.last_name AS student_name,
                    c.name AS class_name
-            FROM attendance_records a
-            JOIN students s ON a.student_id = s.id
+            FROM attendance_entries ae
+            JOIN attendance_records ar ON ae.record_id = ar.id
+            JOIN students s ON ae.student_id = s.id
             LEFT JOIN classes c ON s.class_id = c.id
-            WHERE a.tenant_id = '{tid}' ORDER BY a.date DESC LIMIT 1000""",
+            WHERE ar.tenant_id = '{tid}' ORDER BY ar.date DESC LIMIT 1000""",
         "fees": f"""
-            SELECT f.amount, f.status, f.due_date, f.paid_date, f.fee_type,
+            SELECT inv.invoice_number, inv.total_amount, inv.paid_amount,
+                   inv.status, inv.due_date,
                    s.first_name || ' ' || s.last_name AS student_name
-            FROM fee_records f JOIN students s ON f.student_id = s.id
-            WHERE f.tenant_id = '{tid}' LIMIT 500""",
+            FROM invoices inv JOIN students s ON inv.student_id = s.id
+            WHERE inv.tenant_id = '{tid}' LIMIT 500""",
         "academics": f"""
-            SELECT e.name AS exam_name, er.marks_obtained, er.max_marks,
-                   er.grade, sub.name AS subject_name,
-                   s.first_name || ' ' || s.last_name AS student_name
+            SELECT e.name AS exam_name, e.exam_type, er.marks_obtained, er.grade, er.is_pass,
+                   sub.name AS subject_name,
+                   s.first_name || ' ' || s.last_name AS student_name,
+                   c.name AS class_name
             FROM exam_results er
             JOIN exams e ON er.exam_id = e.id
-            JOIN subjects sub ON er.subject_id = sub.id
+            JOIN subjects sub ON e.subject_id = sub.id
             JOIN students s ON er.student_id = s.id
+            LEFT JOIN classes c ON s.class_id = c.id
             WHERE er.tenant_id = '{tid}' LIMIT 500""",
         "staff": f"""
-            SELECT u.full_name, u.email, u.role
+            SELECT u.first_name || ' ' || u.last_name AS full_name, u.email, u.role
             FROM users u
             WHERE u.tenant_id = '{tid}' AND u.role IN ('teacher', 'admin') LIMIT 200""",
-        "announcements": f"""
-            SELECT title, body, created_at FROM announcements
-            WHERE tenant_id = '{tid}' ORDER BY created_at DESC LIMIT 100""",
         "timetable": f"""
-            SELECT sub.name AS subject, u.full_name AS teacher,
+            SELECT sub.name AS subject,
+                   u.first_name || ' ' || u.last_name AS teacher,
                    c.name AS class_name, t.day_of_week, t.start_time, t.end_time
             FROM timetable_entries t
             JOIN subjects sub ON t.subject_id = sub.id
@@ -265,6 +267,244 @@ async def _fetch_tenant_data(tenant_id: str, sources: List[str], db: AsyncSessio
         except Exception:
             data[source] = []
     return data
+
+
+async def _fetch_live_context(tenant_id: str, query: str, db: AsyncSession) -> str:
+    """
+    Detect query intent and fetch the relevant live data directly from DB.
+    Returns a formatted string injected into the system prompt.
+    Always provides fresh data regardless of whether training has been run.
+    """
+    q = query.lower()
+    tid = tenant_id
+    sections: list[str] = []
+
+    # ── School overview (always included) ────────────────────────────────────
+    try:
+        r = await db.execute(text(f"""
+            SELECT
+                (SELECT COUNT(*) FROM students WHERE tenant_id='{tid}' AND status='ACTIVE') AS total_students,
+                (SELECT COUNT(*) FROM students WHERE tenant_id='{tid}') AS all_students,
+                (SELECT COUNT(*) FROM classes  WHERE tenant_id='{tid}') AS total_classes,
+                (SELECT COUNT(*) FROM users    WHERE tenant_id='{tid}' AND role='teacher') AS total_teachers,
+                (SELECT COUNT(*) FROM invoices WHERE tenant_id='{tid}') AS total_invoices,
+                (SELECT COALESCE(SUM(paid_amount),0) FROM invoices WHERE tenant_id='{tid}') AS total_collected,
+                (SELECT COALESCE(SUM(total_amount - paid_amount),0) FROM invoices
+                 WHERE tenant_id='{tid}' AND status NOT IN ('PAID','CANCELLED')) AS total_outstanding
+        """))
+        ov = dict(r.mappings().fetchone() or {})
+        if ov:
+            sections.append(
+                f"SCHOOL OVERVIEW:\n"
+                f"  Active students: {ov.get('total_students',0)}\n"
+                f"  Total classes: {ov.get('total_classes',0)}\n"
+                f"  Teachers: {ov.get('total_teachers',0)}\n"
+                f"  Fee collected: ₹{float(ov.get('total_collected',0)):,.0f}\n"
+                f"  Fee outstanding: ₹{float(ov.get('total_outstanding',0)):,.0f}"
+            )
+    except Exception:
+        pass
+
+    # ── Attendance analysis ───────────────────────────────────────────────────
+    needs_attendance = any(w in q for w in [
+        "attend", "absent", "present", "late", "75%", "75 %", "below 75", "low attend",
+        "irregul", "truant", "bunk", "miss",
+    ])
+    if needs_attendance:
+        try:
+            # Students below 75% attendance
+            r = await db.execute(text(f"""
+                WITH att AS (
+                    SELECT ae.student_id,
+                           COUNT(*)                                                       AS total_days,
+                           SUM(CASE WHEN ae.status IN ('PRESENT','LATE') THEN 1 ELSE 0 END) AS present_days
+                    FROM attendance_entries ae
+                    JOIN attendance_records ar ON ae.record_id = ar.id
+                    WHERE ar.tenant_id = '{tid}'
+                    GROUP BY ae.student_id
+                )
+                SELECT s.first_name || ' ' || s.last_name AS student_name,
+                       c.name AS class_name,
+                       att.total_days,
+                       att.present_days,
+                       ROUND(att.present_days * 100.0 / NULLIF(att.total_days,0), 1) AS pct
+                FROM att
+                JOIN students s ON s.id = att.student_id
+                LEFT JOIN classes c ON s.class_id = c.id
+                WHERE att.total_days > 0
+                  AND att.present_days * 100.0 / att.total_days < 75
+                ORDER BY pct ASC
+                LIMIT 50
+            """))
+            rows = [dict(x) for x in r.mappings().all()]
+            if rows:
+                lines = [f"  {i+1}. {row['student_name']} ({row['class_name'] or '—'}): {row['pct']}% ({row['present_days']}/{row['total_days']} days)"
+                         for i, row in enumerate(rows)]
+                sections.append(f"STUDENTS WITH ATTENDANCE BELOW 75% ({len(rows)} students):\n" + "\n".join(lines))
+            else:
+                sections.append("ATTENDANCE: No students currently below 75% attendance threshold.")
+
+            # Monthly summary
+            r2 = await db.execute(text(f"""
+                SELECT TO_CHAR(ar.date,'Mon YYYY') AS month,
+                       COUNT(ae.id) AS total_entries,
+                       SUM(CASE WHEN ae.status='PRESENT' THEN 1 ELSE 0 END) AS present,
+                       ROUND(SUM(CASE WHEN ae.status='PRESENT' THEN 1 ELSE 0 END)*100.0
+                             / NULLIF(COUNT(ae.id),0),1) AS rate
+                FROM attendance_entries ae
+                JOIN attendance_records ar ON ae.record_id = ar.id
+                WHERE ar.tenant_id = '{tid}'
+                GROUP BY TO_CHAR(ar.date,'Mon YYYY'), DATE_TRUNC('month', ar.date)
+                ORDER BY DATE_TRUNC('month', ar.date) DESC
+                LIMIT 6
+            """))
+            months = [dict(x) for x in r2.mappings().all()]
+            if months:
+                mlines = [f"  {m['month']}: {m['rate']}% ({m['present']}/{m['total_entries']})"
+                          for m in months]
+                sections.append("MONTHLY ATTENDANCE TREND:\n" + "\n".join(mlines))
+        except Exception:
+            pass
+
+    # ── Fee / payment analysis ────────────────────────────────────────────────
+    needs_fees = any(w in q for w in [
+        "fee", "fees", "invoice", "payment", "paid", "unpaid", "overdue",
+        "outstanding", "due", "collect", "rupee", "₹",
+    ])
+    if needs_fees:
+        try:
+            r = await db.execute(text(f"""
+                SELECT status,
+                       COUNT(*) AS count,
+                       COALESCE(SUM(total_amount),0) AS total,
+                       COALESCE(SUM(paid_amount),0)  AS paid
+                FROM invoices
+                WHERE tenant_id = '{tid}'
+                GROUP BY status ORDER BY status
+            """))
+            fee_rows = [dict(x) for x in r.mappings().all()]
+            if fee_rows:
+                lines = [f"  {row['status']}: {row['count']} invoices — total ₹{float(row['total']):,.0f}, paid ₹{float(row['paid']):,.0f}"
+                         for row in fee_rows]
+                sections.append("FEE STATUS BREAKDOWN:\n" + "\n".join(lines))
+
+            # Overdue students
+            r2 = await db.execute(text(f"""
+                SELECT s.first_name || ' ' || s.last_name AS student_name,
+                       c.name AS class_name,
+                       inv.invoice_number,
+                       inv.total_amount - inv.paid_amount AS balance,
+                       inv.due_date
+                FROM invoices inv
+                JOIN students s ON inv.student_id = s.id
+                LEFT JOIN classes c ON s.class_id = c.id
+                WHERE inv.tenant_id = '{tid}'
+                  AND inv.status IN ('OVERDUE','PENDING','PARTIAL')
+                  AND inv.total_amount > inv.paid_amount
+                ORDER BY balance DESC LIMIT 20
+            """))
+            overdue = [dict(x) for x in r2.mappings().all()]
+            if overdue:
+                lines = [f"  {row['student_name']} ({row['class_name'] or '—'}): ₹{float(row['balance']):,.0f} due ({row['due_date']})"
+                         for row in overdue]
+                sections.append(f"STUDENTS WITH OUTSTANDING FEES ({len(overdue)} shown):\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+    # ── Exam / academic performance ───────────────────────────────────────────
+    needs_academics = any(w in q for w in [
+        "exam", "result", "grade", "marks", "score", "pass", "fail",
+        "academic", "performance", "topper", "top student", "rank",
+    ])
+    if needs_academics:
+        try:
+            r = await db.execute(text(f"""
+                SELECT e.name AS exam_name, e.exam_type,
+                       COUNT(er.id) AS total_students,
+                       ROUND(AVG(er.marks_obtained),1) AS avg_marks,
+                       ROUND(MAX(er.marks_obtained),1) AS highest,
+                       ROUND(MIN(er.marks_obtained),1) AS lowest,
+                       SUM(CASE WHEN er.is_pass THEN 1 ELSE 0 END) AS passed,
+                       ROUND(SUM(CASE WHEN er.is_pass THEN 1 ELSE 0 END)*100.0
+                             / NULLIF(COUNT(er.id),0),1) AS pass_rate
+                FROM exam_results er
+                JOIN exams e ON er.exam_id = e.id
+                WHERE er.tenant_id = '{tid}'
+                GROUP BY e.id, e.name, e.exam_type
+                ORDER BY e.exam_type, e.name
+                LIMIT 20
+            """))
+            exams = [dict(x) for x in r.mappings().all()]
+            if exams:
+                lines = [f"  {row['exam_name']} ({row['exam_type']}): avg {row['avg_marks']}, pass rate {row['pass_rate']}% ({row['passed']}/{row['total_students']}), high {row['highest']}, low {row['lowest']}"
+                         for row in exams]
+                sections.append("EXAM RESULTS SUMMARY:\n" + "\n".join(lines))
+
+            # Grade distribution
+            r2 = await db.execute(text(f"""
+                SELECT grade, COUNT(*) AS cnt
+                FROM exam_results WHERE tenant_id = '{tid}'
+                GROUP BY grade ORDER BY grade
+            """))
+            grades = [dict(x) for x in r2.mappings().all()]
+            if grades:
+                lines = [f"  Grade {g['grade']}: {g['cnt']} students" for g in grades]
+                sections.append("GRADE DISTRIBUTION:\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+    # ── Student roster ────────────────────────────────────────────────────────
+    needs_students = any(w in q for w in [
+        "student", "enroll", "class", "how many", "count", "list", "total",
+    ])
+    if needs_students:
+        try:
+            r = await db.execute(text(f"""
+                SELECT c.name AS class_name,
+                       COUNT(s.id) AS student_count,
+                       u.first_name || ' ' || u.last_name AS class_teacher
+                FROM classes c
+                LEFT JOIN students s ON s.class_id = c.id AND s.status = 'ACTIVE'
+                LEFT JOIN users u ON c.teacher_id = u.id
+                WHERE c.tenant_id = '{tid}'
+                GROUP BY c.id, c.name, class_teacher
+                ORDER BY c.name
+            """))
+            classes = [dict(x) for x in r.mappings().all()]
+            if classes:
+                lines = [f"  {row['class_name']}: {row['student_count']} students (Teacher: {row['class_teacher'] or '—'})"
+                         for row in classes]
+                sections.append("STUDENTS PER CLASS:\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+    # ── Assignment stats ──────────────────────────────────────────────────────
+    needs_assignments = any(w in q for w in [
+        "assignment", "homework", "submit", "submission", "project",
+    ])
+    if needs_assignments:
+        try:
+            r = await db.execute(text(f"""
+                SELECT COUNT(DISTINCT a.id) AS total_assignments,
+                       COUNT(sub.id) AS total_submissions,
+                       ROUND(AVG(sub.marks_obtained),1) AS avg_marks
+                FROM assignments a
+                LEFT JOIN submissions sub ON sub.assignment_id = a.id
+                WHERE a.tenant_id = '{tid}'
+            """))
+            row = dict(r.mappings().fetchone() or {})
+            if row and row.get('total_assignments'):
+                sections.append(
+                    f"ASSIGNMENTS: {row['total_assignments']} assignments, "
+                    f"{row['total_submissions']} submissions, avg marks: {row['avg_marks'] or '—'}"
+                )
+        except Exception:
+            pass
+
+    if not sections:
+        return ""
+
+    return "\n\n".join(sections)
 
 
 def _data_to_documents(source: str, records: list) -> list:
@@ -593,6 +833,15 @@ async def chat(
         except Exception:
             pass
 
+    # ── Live data context injection ─────────────────────────────────────────
+    # Fetch real school data directly from DB for every query.
+    # This runs regardless of whether the FAISS training index exists.
+    live_ctx = ""
+    try:
+        live_ctx = await _fetch_live_context(str(tid), body.message, db)
+    except Exception:
+        pass  # never crash a chat request due to context fetch failure
+
     t0 = time.time()
     call_status = "pass"
     error_msg = None
@@ -605,6 +854,7 @@ async def chat(
             model=resolved_model,
             provider=body.provider,
             api_key=resolved_api_key,
+            live_context=live_ctx,
         )
     except Exception as exc:
         call_status = "fail"

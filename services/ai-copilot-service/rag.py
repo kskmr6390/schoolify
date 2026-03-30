@@ -240,24 +240,39 @@ class RAGPipeline:
         results = store.search(query, k=k)
         return [{"score": score, **meta} for score, meta in results if score > 0.3]
 
-    def _build_system_prompt(self, context: List[Dict], tenant_name: str) -> str:
-        context_text = "\n\n".join([
+    def _build_system_prompt(
+        self,
+        context: List[Dict],
+        tenant_name: str,
+        live_context: str = "",
+    ) -> str:
+        vector_text = "\n\n".join([
             f"[Source {i+1} - {ctx.get('source_type', 'data')}]\n{ctx.get('content', '')}"
             for i, ctx in enumerate(context)
         ])
-        return f"""You are an AI assistant for {tenant_name}'s school management system.
-You help administrators, teachers, and parents understand school data and make informed decisions.
 
-Available school data context:
-{context_text if context_text else "No specific data context available for this query."}
+        live_section = (
+            f"\n\nLIVE SCHOOL DATA (fetched in real-time — use this as the primary source of truth):\n"
+            f"{live_context}"
+            if live_context else ""
+        )
+
+        vector_section = (
+            f"\n\nADDITIONAL INDEXED CONTEXT:\n{vector_text}"
+            if vector_text else ""
+        )
+
+        return f"""You are an AI data assistant for {tenant_name}'s school management system.
+You have direct access to the school's live data and must answer questions using real numbers and names from that data.
+{live_section}{vector_section}
 
 Guidelines:
-- Answer based on the provided context when available
-- Be specific about student names, numbers, and percentages when available
-- If data is insufficient, say so clearly - don't make up numbers
-- Provide actionable recommendations when relevant
-- Be concise but thorough
-- Format lists and statistics clearly"""
+- ALWAYS use the live school data above to answer — never say "I don't have access"
+- Quote exact student names, percentages, and counts from the data
+- If a specific piece of data is not in the context above, say what IS available and offer to help further
+- Provide clear lists and tables when showing multiple students/records
+- Offer actionable recommendations (e.g., contact parents of low-attendance students)
+- Be concise and direct — lead with the answer, then explain"""
 
     async def _call_provider(
         self,
@@ -372,12 +387,13 @@ Guidelines:
         model: Optional[str] = None,
         provider: str = "anthropic",
         api_key: Optional[str] = None,
+        live_context: str = "",
     ) -> Tuple[str, List[Dict], int, int]:
         """
-        Generate an AI response using the specified provider + RAG context.
+        Generate an AI response using the specified provider + RAG context + live data.
         Returns (response_text, sources_used, tokens_in, tokens_out).
         """
-        system_prompt = self._build_system_prompt(context, tenant_name)
+        system_prompt = self._build_system_prompt(context, tenant_name, live_context=live_context)
         messages = []
         for msg in conversation_history[-10:]:
             messages.append({"role": msg["role"], "content": msg["content"]})
@@ -399,12 +415,14 @@ Guidelines:
         model: Optional[str] = None,
         provider: str = "anthropic",
         api_key: Optional[str] = None,
+        live_context: str = "",
     ) -> Dict:
-        """Full RAG pipeline: retrieve → augment → generate."""
+        """Full RAG pipeline: live data + retrieve from FAISS → augment → generate."""
         context = await self.retrieve_context(tenant_id, query)
         response, sources, tok_in, tok_out = await self.generate_response(
             query, context, conversation_history or [], tenant_name,
             model=model, provider=provider, api_key=api_key,
+            live_context=live_context,
         )
         return {
             "response": response,
