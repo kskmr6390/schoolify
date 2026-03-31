@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CalendarDays, Grid3X3, ChevronLeft, ChevronRight, Check, X, Clock, BookOpen,
@@ -70,6 +70,12 @@ function StudentsGrid() {
       return (res as any)?.data ?? []
     },
   })
+
+  useEffect(() => {
+    if (classes && classes.length > 0 && !selectedClass) {
+      setSelectedClass(classes[0].id)
+    }
+  }, [classes])
 
   const { data: students, isLoading } = useQuery({
     queryKey: ['class-students', selectedClass],

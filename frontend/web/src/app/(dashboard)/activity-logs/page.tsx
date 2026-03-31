@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import {
   Activity, Search, Filter, Download, Trash2, Calendar,
   User, Plus, Pencil, Eye, LogIn, LogOut, Upload, FileDown,
@@ -11,31 +12,7 @@ import {
 import { useLogStore, ActivityLog, LogAction } from '../../../store/logStore'
 import { useAuthStore } from '../../../store/authStore'
 import { cn } from '../../../lib/utils'
-
-// ── Demo seed logs (shown when no real logs exist) ────────────────────────────
-function seedTime(minutesAgo: number) {
-  return new Date(Date.now() - minutesAgo * 60000).toISOString()
-}
-
-const DEMO_LOGS: ActivityLog[] = [
-  { id: 'd01', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'create', module: 'students', target: 'Student: Riya Sharma (Class 8-A)', detail: 'New student admitted — Riya Sharma enrolled in Class 8-A with roll no. 42', createdAt: seedTime(5) },
-  { id: 'd02', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'update', module: 'students', target: 'Student: Arjun Mehta', detail: 'Updated contact info — parent phone changed from +91 9800012345 to +91 9900012345', metadata: { field: 'parent_phone', old: '+91 9800012345', new: '+91 9900012345' }, createdAt: seedTime(22) },
-  { id: 'd03', tenantId: '__demo__', userId: 'u_teacher1', userName: 'Priya Sharma', userEmail: 'priya@school.in', userRole: 'teacher', action: 'create', module: 'attendance', target: 'Class 8-A — 2026-03-23', detail: 'Marked attendance for Class 8-A: 36 Present, 2 Absent, 0 Late', metadata: { present: 36, absent: 2, late: 0, date: '2026-03-23' }, createdAt: seedTime(45) },
-  { id: 'd04', tenantId: '__demo__', userId: 'u_teacher2', userName: 'Ramesh Kumar', userEmail: 'ramesh@school.in', userRole: 'teacher', action: 'create', module: 'assignments', target: 'Assignment: Physics Chapter 7 — Class 10-B', detail: 'New assignment posted — Due date: 2026-03-30, Max marks: 20', metadata: { due: '2026-03-30', marks: 20 }, createdAt: seedTime(90) },
-  { id: 'd05', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'create', module: 'teachers', target: 'Teacher: Kavita Nair', detail: 'New teacher account created — Kavita Nair (Hindi), Employee ID: TCH2034', createdAt: seedTime(120) },
-  { id: 'd06', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'login', module: 'auth', target: 'Dashboard', detail: 'Admin logged in from 192.168.1.10', metadata: { ip: '192.168.1.10', browser: 'Chrome 121' }, createdAt: seedTime(130) },
-  { id: 'd07', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'update', module: 'fees', target: 'Invoice #INV-2024-0089 — Rohan Verma', detail: 'Fee invoice updated — Status changed from Pending to Paid, Amount: ₹18,500', metadata: { invoice: 'INV-2024-0089', old_status: 'pending', new_status: 'paid', amount: 18500 }, createdAt: seedTime(180) },
-  { id: 'd08', tenantId: '__demo__', userId: 'u_teacher1', userName: 'Priya Sharma', userEmail: 'priya@school.in', userRole: 'teacher', action: 'create', module: 'exams', target: 'Exam: Mid-Term Mathematics — Class 9', detail: 'Exam results published — Class 9 Mid-Term Math. Avg score: 72%, Pass rate: 88%', metadata: { avg: 72, pass_rate: 88, total_students: 42 }, createdAt: seedTime(240) },
-  { id: 'd09', tenantId: '__demo__', userId: 'u_admin2', userName: 'Kavita Nair', userEmail: 'kavita@school.in', userRole: 'teacher', action: 'update', module: 'classes', target: 'Class 10-A', detail: 'Class timetable updated — Period 3 (Tuesday) changed from Free to Hindi', metadata: { day: 'Tuesday', period: 3, old: 'Free', new: 'Hindi' }, createdAt: seedTime(300) },
-  { id: 'd10', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'create', module: 'roles', target: 'Role: Lab Coordinator', detail: 'New custom role created — Lab Coordinator with read access to 8 modules', createdAt: seedTime(360) },
-  { id: 'd11', tenantId: '__demo__', userId: 'u_staff1', userName: 'Anjali Verma', userEmail: 'anjali@school.in', userRole: 'staff', action: 'login', module: 'auth', target: 'Dashboard', detail: 'Staff logged in from 192.168.1.22', createdAt: seedTime(420) },
-  { id: 'd12', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'delete', module: 'students', target: 'Student: Amit Patel (Class 7-B)', detail: 'Student record deleted — Transfer case, destination: DPS Noida', metadata: { reason: 'transfer', destination: 'DPS Noida' }, createdAt: seedTime(500) },
-  { id: 'd13', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'create', module: 'holidays', target: 'Holiday: Holi (2026-03-25)', detail: 'School holiday added — Holi on March 25, 2026 (National)', createdAt: seedTime(600) },
-  { id: 'd14', tenantId: '__demo__', userId: 'u_teacher2', userName: 'Ramesh Kumar', userEmail: 'ramesh@school.in', userRole: 'teacher', action: 'update', module: 'exams', target: 'Result: Sneha Gupta — Physics Mid-Term', detail: 'Exam marks updated — Old: 42/80, New: 56/80 (re-evaluation approved)', metadata: { student: 'Sneha Gupta', old_marks: 42, new_marks: 56, max: 80 }, createdAt: seedTime(700) },
-  { id: 'd15', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'export', module: 'reports', target: 'Annual Report — 2025-26', detail: 'Annual analytics report exported to PDF (124 pages)', createdAt: seedTime(800) },
-  { id: 'd16', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'update', module: 'settings', target: 'School Profile', detail: 'School settings updated — Academic year start date changed to 2026-04-01', metadata: { field: 'academic_year_start', old: '2026-03-15', new: '2026-04-01' }, createdAt: seedTime(1440) },
-  { id: 'd17', tenantId: '__demo__', userId: 'u_admin', userName: 'Suresh Singh', userEmail: 'suresh@school.in', userRole: 'admin', action: 'create', module: 'feed', target: 'Announcement: Annual Sports Day', detail: 'School announcement posted — Annual Sports Day scheduled for April 5, visible to everyone', createdAt: seedTime(2880) },
-]
+import api from '../../../lib/api'
 
 // ── Action meta ───────────────────────────────────────────────────────────────
 const ACTION_META: Record<LogAction, {
@@ -233,14 +210,49 @@ function DateHeader({ date }: { date: string }) {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
+// Map backend audit log → ActivityLog shape
+function mapAuditLog(r: any, tenantId: string): ActivityLog {
+  const action = (r.action ?? '').toLowerCase().replace('create', 'create').replace('update', 'update').replace('delete', 'delete').replace('login', 'login').replace('logout', 'logout') as LogAction
+  return {
+    id:        r.id,
+    tenantId,
+    userId:    r.user_id ?? '',
+    userName:  r.user_name ?? r.user_email ?? r.user_id?.slice(0, 8) ?? 'System',
+    userEmail: r.user_email ?? '',
+    userRole:  r.user_role ?? 'admin',
+    action:    (ACTION_META[action as LogAction] ? action : 'update') as LogAction,
+    module:    r.resource ?? 'system',
+    target:    r.resource_id ? `${r.resource} #${r.resource_id}` : r.resource,
+    detail:    r.extra_data?.detail ?? (r.success ? undefined : 'Action failed'),
+    metadata:  r.extra_data ?? (r.ip_address ? { ip: r.ip_address } : undefined),
+    createdAt: r.created_at,
+  }
+}
+
 export default function ActivityLogsPage() {
   const { tenant, user } = useAuthStore()
   const { getByTenant, clear } = useLogStore()
 
   const tenantId = tenant?.tenant_id ?? ''
-  const realLogs = getByTenant(tenantId)
-  // Show demo logs if no real logs exist
-  const allLogs  = realLogs.length > 0 ? realLogs : DEMO_LOGS
+  const localLogs = getByTenant(tenantId)
+
+  // Fetch backend audit logs
+  const { data: auditData } = useQuery({
+    queryKey: ['audit-logs', tenantId],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/auth/audit-logs?limit=200') as any
+      return (res?.data?.items ?? res?.items ?? []) as any[]
+    },
+    enabled: !!tenantId && (user?.role === 'admin' || user?.role === 'super_admin'),
+    staleTime: 30000,
+  })
+
+  const backendLogs: ActivityLog[] = (auditData ?? []).map((r: any) => mapAuditLog(r, tenantId))
+
+  // Merge: local logs first (most recent actions), then backend logs (deduplicated by id)
+  const localIds = new Set(localLogs.map(l => l.id))
+  const merged = [...localLogs, ...backendLogs.filter(l => !localIds.has(l.id))]
+  const allLogs = merged
 
   const [search,       setSearch]       = useState('')
   const [filterAction, setFilterAction] = useState<LogAction | ''>('')
@@ -410,7 +422,7 @@ export default function ActivityLogsPage() {
         )}
 
         <div className="flex items-center justify-between text-sm text-gray-500">
-          <span>{filtered.length.toLocaleString()} events{realLogs.length === 0 ? ' (demo data)' : ''}</span>
+          <span>{filtered.length.toLocaleString()} events</span>
           {filtered.length > PAGE_SIZE && <span>Page {page} of {totalPages}</span>}
         </div>
       </div>
