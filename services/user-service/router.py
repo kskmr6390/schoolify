@@ -330,12 +330,13 @@ async def get_my_children(
     rel_map = {str(lnk.student_id): lnk.relationship for lnk in link_rows}
 
     rows = (await db.execute(text("""
-        SELECT u.id, u.first_name, u.last_name, u.email, u.status::text,
-               sp.employee_id, s.student_code, s.class_id, s.grade
-        FROM users u
-        LEFT JOIN staff_profiles sp ON sp.user_id = u.id AND sp.tenant_id = :tid
-        LEFT JOIN students s ON s.user_id = u.id AND s.tenant_id = :tid
-        WHERE u.tenant_id = :tid AND u.id = ANY(:ids)
+        SELECT s.id, s.first_name, s.last_name, u.email, s.status::text,
+               s.student_code, s.class_id, s.grade, c.name AS class_name
+        FROM students s
+        LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = :tid
+        LEFT JOIN users u ON u.id = s.user_id AND u.tenant_id = :tid
+        WHERE s.tenant_id = :tid AND s.id = ANY(:ids)
+        ORDER BY s.first_name, s.last_name
     """), {"tid": tid, "ids": [UUIDT(sid) for sid in student_ids]})).fetchall()
 
     result = []
@@ -347,9 +348,10 @@ async def get_my_children(
             "last_name": r[2],
             "email": r[3],
             "status": r[4],
-            "student_code": r[6],
-            "class_id": str(r[7]) if r[7] else None,
-            "grade": r[8],
+            "student_code": r[5],
+            "class_id": str(r[6]) if r[6] else None,
+            "grade": str(r[7]) if r[7] is not None else None,
+            "class_name": r[8],
             "relationship": rel_map.get(sid, "parent"),
         })
     return StandardResponse(success=True, data=result)
@@ -427,19 +429,25 @@ async def list_students(
     current_user: TokenData = Depends(require_roles("admin", "super_admin", "teacher")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return all active students for award/parent-link selection."""
+    """Return all students for award/parent-link selection, queried from the students table."""
     from uuid import UUID as UUIDT
     tid = UUIDT(current_user.tenant_id)
 
     rows = (await db.execute(text("""
-        SELECT u.id, u.first_name, u.last_name, u.email,
-               s.student_code, s.grade
-        FROM users u
-        LEFT JOIN students s ON s.user_id = u.id AND s.tenant_id = :tid
-        WHERE u.tenant_id = :tid
-          AND LOWER(u.role::text) = 'student'
-          AND u.status = 'active'
-        ORDER BY u.first_name, u.last_name
+        SELECT
+            s.id,
+            s.first_name,
+            s.last_name,
+            s.student_code,
+            c.grade,
+            c.name  AS class_name,
+            u.email
+        FROM students s
+        LEFT JOIN classes  c ON c.id = s.class_id  AND c.tenant_id = :tid
+        LEFT JOIN users    u ON u.id = s.user_id   AND u.tenant_id = :tid
+        WHERE s.tenant_id = :tid
+          AND s.status = 'active'
+        ORDER BY s.first_name, s.last_name
     """), {"tid": tid})).fetchall()
 
     return StandardResponse(success=True, data=[
@@ -448,9 +456,10 @@ async def list_students(
             "first_name": r[1],
             "last_name": r[2],
             "name": f"{r[1]} {r[2]}".strip(),
-            "email": r[3],
-            "student_code": r[4],
-            "grade": r[5],
+            "student_code": r[3],
+            "grade": str(r[4]) if r[4] is not None else None,
+            "class_name": r[5],
+            "email": r[6],
         }
         for r in rows
     ])

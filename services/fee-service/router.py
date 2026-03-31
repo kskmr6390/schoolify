@@ -4,19 +4,20 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func, select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..shared.database import get_db
+from ..shared.database import AsyncSessionLocal, get_db
 from ..shared.events import Topics, event_producer
 from ..shared.redis_client import set_with_lock
 from ..shared.schemas import PaginatedResponse, PaginationParams, StandardResponse
 from ..shared.security import get_current_user, require_roles
-from .models import (FeeReceipt, FeeStructure, Invoice, InvoiceItem,
-                     InvoiceStatus, Payment, PaymentStatus)
-from .schemas import (BulkGenerateInvoicesRequest, CreateInvoiceRequest,
+from .models import (BulkReceiptJob, FeeReceipt, FeeStructure, Invoice, InvoiceItem,
+                     InvoiceStatus, Payment, PaymentStatus, ReceiptGenerationStatus)
+from .schemas import (BulkGenerateInvoicesRequest, BulkGenerateReceiptsRequest,
+                      BulkReceiptJobResponse, CreateInvoiceRequest,
                       FeeCollectionReport, FeeReceiptResponse, FeeStructureCreate,
                       FeeStructureResponse, GenerateReceiptRequest, InvoiceResponse,
                       PaymentResponse, RecordPaymentRequest, StudentFeeStatement)
@@ -475,6 +476,479 @@ async def delete_receipt(
     await db.flush()
 
     return StandardResponse.ok({"deleted": True, "receipt_id": str(receipt_id)})
+
+
+@router.post("/receipts/bulk-generate", response_model=StandardResponse[BulkReceiptJobResponse], status_code=202)
+async def bulk_generate_receipts(
+    body: BulkGenerateReceiptsRequest,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Start async bulk receipt generation for all paid/partial invoices.
+    Returns a job record immediately; poll /bulk-jobs/{job_id} for progress.
+    """
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    uid = UUIDT(current_user.user_id)
+
+    # Count invoices to process (paid or partial, one per student)
+    count_res = await db.execute(
+        select(func.count(func.distinct(Invoice.student_id))).where(
+            Invoice.tenant_id == tid,
+            Invoice.status.in_([InvoiceStatus.PAID, InvoiceStatus.PARTIAL]),
+        )
+    )
+    total = count_res.scalar() or 0
+
+    job = BulkReceiptJob(
+        tenant_id=tid,
+        created_by=uid,
+        total=total,
+        completed=0,
+        failed=0,
+        status="pending",
+        template=body.template,
+        send_email=body.send_email,
+        error_log=[],
+    )
+    db.add(job)
+    await db.flush()
+    await db.refresh(job)
+    job_id = str(job.id)
+
+    background_tasks.add_task(
+        _run_bulk_receipt_job,
+        job_id=job_id,
+        tenant_id=str(tid),
+        template=body.template,
+        send_email=body.send_email,
+        school_name=body.school_name,
+    )
+
+    return StandardResponse.ok(BulkReceiptJobResponse.model_validate(job))
+
+
+async def _run_bulk_receipt_job(
+    job_id: str,
+    tenant_id: str,
+    template: str,
+    send_email: bool,
+    school_name: str,
+) -> None:
+    """Background worker: generates PDF receipts for all paid/partial invoices."""
+    from uuid import UUID as UUIDT
+    from .receipt_utils import generate_receipt_pdf, upload_pdf_to_s3, send_receipt_email
+
+    tid = UUIDT(tenant_id)
+
+    async with AsyncSessionLocal() as db:
+        try:
+            # Mark job running
+            job_res = await db.execute(select(BulkReceiptJob).where(BulkReceiptJob.id == UUIDT(job_id)))
+            job = job_res.scalar_one_or_none()
+            if not job:
+                return
+            job.status = "running"
+            await db.commit()
+
+            # Fetch all students with paid/partial invoices
+            rows = (await db.execute(text("""
+                SELECT DISTINCT i.student_id FROM invoices i
+                WHERE i.tenant_id = :tid
+                  AND i.status IN ('paid', 'partial')
+            """), {"tid": tid})).fetchall()
+            student_ids = [r[0] for r in rows]
+
+            completed = 0
+            failed = 0
+            error_log = []
+
+            for student_id in student_ids:
+                try:
+                    # Fetch student info from students table (shared DB)
+                    student_row = (await db.execute(text("""
+                        SELECT s.first_name, s.last_name, s.student_code, u.email
+                        FROM students s
+                        LEFT JOIN users u ON u.id = s.user_id AND u.tenant_id = :tid
+                        WHERE s.id = :sid AND s.tenant_id = :tid
+                        LIMIT 1
+                    """), {"tid": tid, "sid": student_id})).fetchone()
+
+                    student_name = "Student"
+                    student_code = ""
+                    student_email = None
+                    if student_row:
+                        student_name = f"{student_row[0] or ''} {student_row[1] or ''}".strip() or "Student"
+                        student_code = student_row[2] or ""
+                        student_email = student_row[3]
+
+                    # Fetch all paid/partial invoices for this student with items
+                    inv_res = await db.execute(
+                        select(Invoice)
+                        .options(selectinload(Invoice.items))
+                        .where(
+                            Invoice.tenant_id == tid,
+                            Invoice.student_id == student_id,
+                            Invoice.status.in_([InvoiceStatus.PAID, InvoiceStatus.PARTIAL]),
+                        )
+                    )
+                    invoices = inv_res.scalars().all()
+                    if not invoices:
+                        continue
+
+                    # Soft-delete existing non-deleted receipts for this student
+                    existing_res = await db.execute(
+                        select(FeeReceipt).where(
+                            FeeReceipt.student_id == student_id,
+                            FeeReceipt.tenant_id == tid,
+                            FeeReceipt.is_deleted == False,
+                        )
+                    )
+                    for ex in existing_res.scalars().all():
+                        ex.is_deleted = True
+                        ex.deleted_at = datetime.utcnow()
+
+                    # Count existing receipts for numbering
+                    count_res = await db.execute(
+                        select(func.count(FeeReceipt.id)).where(FeeReceipt.tenant_id == tid)
+                    )
+                    count = (count_res.scalar() or 0) + 1
+                    year = date.today().year
+                    receipt_number = f"RCP-{year}-{count:05d}"
+
+                    total_amount = sum(inv.total_amount for inv in invoices)
+                    paid_amount = sum(inv.paid_amount for inv in invoices)
+
+                    # Create receipt record
+                    receipt = FeeReceipt(
+                        tenant_id=tid,
+                        receipt_number=receipt_number,
+                        student_id=student_id,
+                        invoice_ids=[str(inv.id) for inv in invoices],
+                        template=template,
+                        is_clubbed=len(invoices) > 1,
+                        total_amount=total_amount,
+                        paid_amount=paid_amount,
+                        generation_status=ReceiptGenerationStatus.GENERATING,
+                    )
+                    db.add(receipt)
+                    await db.flush()
+
+                    # Build data dicts for PDF generator
+                    receipt_dict = {
+                        "receipt_number": receipt_number,
+                        "total_amount": float(total_amount),
+                        "paid_amount": float(paid_amount),
+                        "created_at": datetime.utcnow().isoformat(),
+                        "student_name": student_name,
+                        "student_code": student_code,
+                    }
+                    invoice_dicts = []
+                    for inv in invoices:
+                        invoice_dicts.append({
+                            "invoice_number": inv.invoice_number,
+                            "issued_date": str(inv.issued_date),
+                            "due_date": str(inv.due_date),
+                            "total_amount": float(inv.total_amount),
+                            "paid_amount": float(inv.paid_amount),
+                            "items": [
+                                {
+                                    "description": item.description,
+                                    "quantity": item.quantity,
+                                    "amount": float(item.amount),
+                                }
+                                for item in inv.items
+                            ],
+                        })
+
+                    # Generate PDF
+                    pdf_bytes = generate_receipt_pdf(receipt_dict, invoice_dicts, school_name)
+
+                    # Upload to S3
+                    pdf_url = upload_pdf_to_s3(pdf_bytes, tenant_id, receipt_number)
+
+                    # Update receipt with PDF URL
+                    receipt.pdf_url = pdf_url
+                    receipt.generation_status = ReceiptGenerationStatus.DONE
+
+                    # Send email if requested and student has email
+                    if send_email and student_email:
+                        try:
+                            send_receipt_email(
+                                to_email=student_email,
+                                student_name=student_name,
+                                receipt_number=receipt_number,
+                                school_name=school_name,
+                                pdf_bytes=pdf_bytes,
+                                pdf_url=pdf_url,
+                            )
+                            receipt.email_sent = True
+                            receipt.email_sent_at = datetime.utcnow()
+                        except Exception:
+                            pass  # Email failure doesn't fail the receipt
+
+                    await db.flush()
+                    completed += 1
+
+                except Exception as exc:
+                    failed += 1
+                    error_log.append({"student_id": str(student_id), "error": str(exc)})
+
+                # Update job progress after each student
+                job.completed = completed
+                job.failed = failed
+                job.error_log = error_log
+                await db.commit()
+
+            # Final job status
+            job.status = "done" if failed == 0 else ("failed" if completed == 0 else "done")
+            job.completed = completed
+            job.failed = failed
+            job.error_log = error_log
+            await db.commit()
+
+        except Exception as exc:
+            job_res = await db.execute(select(BulkReceiptJob).where(BulkReceiptJob.id == UUIDT(job_id)))
+            job = job_res.scalar_one_or_none()
+            if job:
+                job.status = "failed"
+                job.error_log = [{"error": str(exc)}]
+                await db.commit()
+
+
+@router.get("/receipts/bulk-jobs", response_model=StandardResponse[list[BulkReceiptJobResponse]])
+async def list_bulk_receipt_jobs(
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all bulk receipt generation jobs for the tenant."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    result = await db.execute(
+        select(BulkReceiptJob)
+        .where(BulkReceiptJob.tenant_id == tid)
+        .order_by(BulkReceiptJob.created_at.desc())
+        .limit(20)
+    )
+    jobs = result.scalars().all()
+    return StandardResponse.ok([BulkReceiptJobResponse.model_validate(j) for j in jobs])
+
+
+@router.get("/receipts/bulk-jobs/{job_id}", response_model=StandardResponse[BulkReceiptJobResponse])
+async def get_bulk_receipt_job(
+    job_id: UUID,
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Poll a bulk receipt generation job for current status/progress."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    result = await db.execute(
+        select(BulkReceiptJob).where(
+            BulkReceiptJob.id == job_id,
+            BulkReceiptJob.tenant_id == tid,
+        )
+    )
+    job = result.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return StandardResponse.ok(BulkReceiptJobResponse.model_validate(job))
+
+
+@router.post("/receipts/{receipt_id}/regenerate", response_model=StandardResponse[FeeReceiptResponse])
+async def regenerate_receipt(
+    receipt_id: UUID,
+    background_tasks: BackgroundTasks,
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Regenerate PDF for a single receipt and re-upload to S3."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    res = await db.execute(
+        select(FeeReceipt).where(
+            FeeReceipt.id == receipt_id,
+            FeeReceipt.tenant_id == tid,
+            FeeReceipt.is_deleted == False,
+        )
+    )
+    receipt = res.scalar_one_or_none()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    receipt.generation_status = ReceiptGenerationStatus.GENERATING
+    receipt.generation_error = None
+    await db.flush()
+    await db.refresh(receipt)
+
+    background_tasks.add_task(
+        _regenerate_single_receipt,
+        receipt_id=str(receipt_id),
+        tenant_id=str(tid),
+    )
+
+    return StandardResponse.ok(FeeReceiptResponse(
+        **{k: v for k, v in receipt.__dict__.items() if not k.startswith('_')},
+        invoices=[],
+    ))
+
+
+async def _regenerate_single_receipt(receipt_id: str, tenant_id: str) -> None:
+    """Background: regenerate PDF for one receipt."""
+    from uuid import UUID as UUIDT
+    from .receipt_utils import generate_receipt_pdf, upload_pdf_to_s3
+
+    tid = UUIDT(tenant_id)
+    async with AsyncSessionLocal() as db:
+        try:
+            res = await db.execute(select(FeeReceipt).where(FeeReceipt.id == UUIDT(receipt_id)))
+            receipt = res.scalar_one_or_none()
+            if not receipt:
+                return
+
+            student_row = (await db.execute(text("""
+                SELECT s.first_name, s.last_name, s.student_code
+                FROM students s WHERE s.id = :sid AND s.tenant_id = :tid LIMIT 1
+            """), {"sid": receipt.student_id, "tid": tid})).fetchone()
+
+            student_name = "Student"
+            student_code = ""
+            if student_row:
+                student_name = f"{student_row[0] or ''} {student_row[1] or ''}".strip() or "Student"
+                student_code = student_row[2] or ""
+
+            inv_ids = [UUIDT(str(i)) for i in (receipt.invoice_ids or [])]
+            inv_res = await db.execute(
+                select(Invoice).options(selectinload(Invoice.items)).where(Invoice.id.in_(inv_ids))
+            )
+            invoices = inv_res.scalars().all()
+
+            total_amount = float(receipt.total_amount)
+            paid_amount = float(receipt.paid_amount)
+
+            receipt_dict = {
+                "receipt_number": receipt.receipt_number,
+                "total_amount": total_amount,
+                "paid_amount": paid_amount,
+                "created_at": receipt.created_at.isoformat() if receipt.created_at else datetime.utcnow().isoformat(),
+                "student_name": student_name,
+                "student_code": student_code,
+            }
+            invoice_dicts = [
+                {
+                    "invoice_number": inv.invoice_number,
+                    "issued_date": str(inv.issued_date),
+                    "due_date": str(inv.due_date),
+                    "total_amount": float(inv.total_amount),
+                    "paid_amount": float(inv.paid_amount),
+                    "items": [{"description": it.description, "quantity": it.quantity, "amount": float(it.amount)} for it in inv.items],
+                }
+                for inv in invoices
+            ]
+
+            pdf_bytes = generate_receipt_pdf(receipt_dict, invoice_dicts, "School")
+            pdf_url = upload_pdf_to_s3(pdf_bytes, tenant_id, receipt.receipt_number)
+
+            receipt.pdf_url = pdf_url
+            receipt.generation_status = ReceiptGenerationStatus.DONE
+            receipt.generation_error = None
+            await db.commit()
+
+        except Exception as exc:
+            try:
+                res = await db.execute(select(FeeReceipt).where(FeeReceipt.id == UUIDT(receipt_id)))
+                receipt = res.scalar_one_or_none()
+                if receipt:
+                    receipt.generation_status = ReceiptGenerationStatus.FAILED
+                    receipt.generation_error = str(exc)
+                    await db.commit()
+            except Exception:
+                pass
+
+
+@router.post("/receipts/{receipt_id}/send-email", response_model=StandardResponse[dict])
+async def send_receipt_email_endpoint(
+    receipt_id: UUID,
+    current_user=Depends(require_roles("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send or resend the receipt PDF via email to the student."""
+    from uuid import UUID as UUIDT
+    from .receipt_utils import generate_receipt_pdf, send_receipt_email
+
+    tid = UUIDT(current_user.tenant_id)
+
+    res = await db.execute(
+        select(FeeReceipt).where(
+            FeeReceipt.id == receipt_id,
+            FeeReceipt.tenant_id == tid,
+            FeeReceipt.is_deleted == False,
+        )
+    )
+    receipt = res.scalar_one_or_none()
+    if not receipt:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
+    student_row = (await db.execute(text("""
+        SELECT s.first_name, s.last_name, s.student_code, u.email
+        FROM students s
+        LEFT JOIN users u ON u.id = s.user_id AND u.tenant_id = :tid
+        WHERE s.id = :sid AND s.tenant_id = :tid LIMIT 1
+    """), {"tid": tid, "sid": receipt.student_id})).fetchone()
+
+    if not student_row or not student_row[3]:
+        raise HTTPException(status_code=422, detail="Student email not found")
+
+    student_name = f"{student_row[0] or ''} {student_row[1] or ''}".strip() or "Student"
+    student_code = student_row[2] or ""
+    student_email = student_row[3]
+
+    inv_ids = [UUIDT(str(i)) for i in (receipt.invoice_ids or [])]
+    inv_res = await db.execute(
+        select(Invoice).options(selectinload(Invoice.items)).where(Invoice.id.in_(inv_ids))
+    )
+    invoices = inv_res.scalars().all()
+
+    receipt_dict = {
+        "receipt_number": receipt.receipt_number,
+        "total_amount": float(receipt.total_amount),
+        "paid_amount": float(receipt.paid_amount),
+        "created_at": receipt.created_at.isoformat() if receipt.created_at else datetime.utcnow().isoformat(),
+        "student_name": student_name,
+        "student_code": student_code,
+    }
+    invoice_dicts = [
+        {
+            "invoice_number": inv.invoice_number,
+            "issued_date": str(inv.issued_date),
+            "due_date": str(inv.due_date),
+            "total_amount": float(inv.total_amount),
+            "paid_amount": float(inv.paid_amount),
+            "items": [{"description": it.description, "quantity": it.quantity, "amount": float(it.amount)} for it in inv.items],
+        }
+        for inv in invoices
+    ]
+
+    pdf_bytes = generate_receipt_pdf(receipt_dict, invoice_dicts, "School")
+    send_receipt_email(
+        to_email=student_email,
+        student_name=student_name,
+        receipt_number=receipt.receipt_number,
+        school_name="School",
+        pdf_bytes=pdf_bytes,
+        pdf_url=receipt.pdf_url,
+    )
+
+    receipt.email_sent = True
+    receipt.email_sent_at = datetime.utcnow()
+    await db.flush()
+
+    return StandardResponse.ok({"sent": True, "to": student_email})
 
 
 @router.get("/reports/collection", response_model=StandardResponse[FeeCollectionReport])

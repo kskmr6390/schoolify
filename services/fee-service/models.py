@@ -108,10 +108,18 @@ class InvoiceItem(Base):
     invoice = relationship("Invoice", back_populates="items")
 
 
+class ReceiptGenerationStatus(str, enum.Enum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    DONE = "done"
+    FAILED = "failed"
+
+
 class FeeReceipt(TenantAwareModel):
     """
     Generated fee receipt — can cover one invoice or multiple (clubbed).
     Supports soft-delete so admin can delete and regenerate.
+    pdf_url points to S3 object; email_sent tracks delivery.
     """
     __tablename__ = "fee_receipts"
 
@@ -126,6 +134,30 @@ class FeeReceipt(TenantAwareModel):
     generated_by = Column(UUID(as_uuid=True), nullable=True)
     is_deleted = Column(Boolean, default=False)
     deleted_at = Column(DateTime, nullable=True)
+    # PDF + delivery
+    pdf_url = Column(String(1024), nullable=True)         # S3 signed / public URL
+    email_sent = Column(Boolean, default=False)
+    email_sent_at = Column(DateTime, nullable=True)
+    generation_status = Column(
+        Enum(ReceiptGenerationStatus),
+        default=ReceiptGenerationStatus.PENDING,
+        nullable=False,
+    )
+    generation_error = Column(Text, nullable=True)
+
+
+class BulkReceiptJob(TenantAwareModel):
+    """Tracks progress of a bulk receipt generation run."""
+    __tablename__ = "bulk_receipt_jobs"
+
+    created_by = Column(UUID(as_uuid=True), nullable=False)
+    total = Column(Integer, default=0)
+    completed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    status = Column(String(20), default="pending")        # pending|running|done|failed
+    template = Column(String(20), default="classic")
+    send_email = Column(Boolean, default=True)
+    error_log = Column(JSONB, default=list)               # [{student_id, error}]
 
 
 class Payment(TenantAwareModel):

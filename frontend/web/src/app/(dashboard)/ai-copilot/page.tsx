@@ -10,6 +10,7 @@ import api from '../../../lib/api'
 import { cn } from '../../../lib/utils'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAIStore, AI_PROVIDERS } from '../../../store/aiStore'
+import { useAuthStore } from '../../../store/authStore'
 
 interface Message {
   id: string
@@ -37,6 +38,17 @@ export default function AICopilotPage() {
   const searchParams = useSearchParams()
   const queryClient = useQueryClient()
   const { provider, setProvider, apiKeys, models, setModel, localArch, localStatus } = useAIStore()
+  const { user } = useAuthStore()
+
+  // Check which providers have a key saved on the server (tenant-scoped)
+  const { data: serverKeysRaw } = useQuery({
+    queryKey: ['ai-saved-keys'],
+    queryFn: () => api.get('/api/v1/copilot/config/api-keys') as any,
+    select: (d: any) => (d?.data ?? {}) as Record<string, string>,
+    enabled: !!(user?.role === 'admin' || user?.role === 'super_admin' || user?.role === 'teacher'),
+  })
+  const serverKeys: Record<string, string> = serverKeysRaw ?? {}
+  const hasKeyForProvider = provider === 'local' || !!apiKeys[provider] || !!serverKeys[provider]
 
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState(searchParams.get('q') || '')
@@ -293,7 +305,7 @@ export default function AICopilotPage() {
             )}
 
             {/* No API key warning */}
-            {provider !== 'local' && !apiKeys[provider] && (
+            {!hasKeyForProvider && (
               <span className="text-xs text-amber-600 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
                 No API key — set one in Settings → AI
               </span>

@@ -63,26 +63,22 @@ function StudentsGrid() {
   const [entries, setEntries] = useState<Record<string, AttendanceStatus>>({})
   const [search, setSearch] = useState('')
 
-  const { data: classes } = useQuery({
+  const { data: classes = [] } = useQuery({
     queryKey: ['classes'],
-    queryFn: async () => {
-      const res = await api.get('/api/v1/classes')
-      return (res as any)?.data ?? []
-    },
+    queryFn: () => api.get('/api/v1/classes') as any,
+    select: (d: any) => Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []),
   })
 
   useEffect(() => {
-    if (classes && classes.length > 0 && !selectedClass) {
+    if (classes.length > 0 && !selectedClass) {
       setSelectedClass(classes[0].id)
     }
   }, [classes])
 
-  const { data: students, isLoading } = useQuery({
+  const { data: students = [], isLoading } = useQuery({
     queryKey: ['class-students', selectedClass],
-    queryFn: async () => {
-      const res = await api.get(`/api/v1/classes/${selectedClass}/students`)
-      return (res as any)?.data ?? []
-    },
+    queryFn: () => api.get(`/api/v1/classes/${selectedClass}/students`) as any,
+    select: (d: any) => Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []),
     enabled: !!selectedClass,
   })
 
@@ -428,12 +424,10 @@ function CalendarView({ tab }: { tab: TabType }) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [selectedClass, setSelectedClass] = useState('')
 
-  const { data: classes } = useQuery({
+  const { data: classes = [] } = useQuery({
     queryKey: ['classes'],
-    queryFn: async () => {
-      const res = await api.get('/api/v1/classes')
-      return (res as any)?.data ?? []
-    },
+    queryFn: () => api.get('/api/v1/classes') as any,
+    select: (d: any) => Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []),
     enabled: tab === 'students',
   })
 
@@ -466,15 +460,15 @@ function CalendarView({ tab }: { tab: TabType }) {
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(year, month, d))
 
   // selected date detail
-  const { data: dayDetail } = useQuery({
+  const { data: dayDetail = [] } = useQuery({
     queryKey: ['attendance-day', tab, selectedDate, selectedClass],
     queryFn: async () => {
       const params: Record<string, string> = { date: selectedDate! }
       if (tab === 'students' && selectedClass) params.class_id = selectedClass
       const endpoint = tab === 'students' ? '/api/v1/attendance' : `/api/v1/attendance/${tab}`
-      const res = await api.get(endpoint, { params })
-      return (res as any)?.data ?? []
+      return api.get(endpoint, { params }) as any
     },
+    select: (d: any) => Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []),
     enabled: !!selectedDate,
   })
 

@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
 import {
   CreditCard, Plus, X, Loader2, Search, FileText,
   CheckCircle2, AlertCircle, Clock, IndianRupee, Receipt,
-  Eye, RefreshCw, Trash2, Download,
+  Eye, RefreshCw, Trash2, Download, Mail, ExternalLink,
+  Users, Zap, ChevronRight,
 } from 'lucide-react'
 import api from '../../../lib/api'
 import { downloadCSV } from '../../../lib/csvExport'
@@ -275,10 +276,210 @@ function RecordPaymentModal({ invoice, onClose }: { invoice: any; onClose: () =>
   )
 }
 
+// ── Bulk Receipt Progress Bar ─────────────────────────────────────────────────
+
+function BulkJobProgress({ jobId, onDone }: { jobId: string; onDone: () => void }) {
+  const qc = useQueryClient()
+  const doneRef = useRef(false)
+
+  const { data } = useQuery({
+    queryKey: ['bulk-receipt-job', jobId],
+    queryFn: async () => {
+      const res = await api.get(`/api/v1/fees/receipts/bulk-jobs/${jobId}`)
+      return (res as any)?.data ?? {}
+    },
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      if (status === 'done' || status === 'failed') return false
+      return 2000
+    },
+  })
+
+  useEffect(() => {
+    if ((data?.status === 'done' || data?.status === 'failed') && !doneRef.current) {
+      doneRef.current = true
+      qc.invalidateQueries({ queryKey: ['receipts'] })
+      setTimeout(onDone, 3000)
+    }
+  }, [data?.status, qc, onDone])
+
+  const total = data?.total ?? 0
+  const completed = data?.completed ?? 0
+  const failed = data?.failed ?? 0
+  const status = data?.status ?? 'pending'
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0
+  const isDone = status === 'done' || status === 'failed'
+
+  return (
+    <div className="bg-white border border-indigo-200 rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {isDone ? (
+            failed === 0
+              ? <CheckCircle2 size={16} className="text-emerald-500" />
+              : <AlertCircle size={16} className="text-amber-500" />
+          ) : (
+            <Loader2 size={16} className="text-indigo-500 animate-spin" />
+          )}
+          <span className="text-sm font-medium text-gray-800">
+            {status === 'pending' ? 'Preparing...' :
+              status === 'running' ? `Generating receipts... ${completed}/${total}` :
+              status === 'done' ? `Done — ${completed} receipt${completed !== 1 ? 's' : ''} generated` :
+              `Finished with ${failed} error${failed !== 1 ? 's' : ''}`}
+          </span>
+        </div>
+        <span className="text-xs text-gray-400 font-mono">{pct}%</span>
+      </div>
+      <div className="w-full bg-gray-100 rounded-full h-2">
+        <div
+          className={`h-2 rounded-full transition-all duration-500 ${isDone && failed > 0 ? 'bg-amber-400' : 'bg-indigo-500'}`}
+          style={{ width: `${isDone ? 100 : pct}%` }}
+        />
+      </div>
+      {failed > 0 && (
+        <p className="text-xs text-amber-600">{failed} student{failed !== 1 ? 's' : ''} failed — check error log</p>
+      )}
+    </div>
+  )
+}
+
+// ── Student Receipts Panel ────────────────────────────────────────────────────
+
+function ReceiptsPanel({ schoolName }: { schoolName: string }) {
+  const qc = useQueryClient()
+  const [search, setSearch] = useState('')
+  const [bulkJobId, setBulkJobId] = useState<string | null>(null)
+  const [bulkLoading, setBulkLoading] = useState(false)
+
+  const { data: settings } = useQuery({
+    queryKey: ['school-settings'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/settings')
+      return (res as any)?.data ?? {}
+    },
+    staleTime: 60_000,
+  })
+
+  const { data: jobsData } = useQuery({
+    queryKey: ['bulk-receipt-jobs'],
+    queryFn: async () => {
+      const res = await api.get('/api/v1/fees/receipts/bulk-jobs')
+      return (res as any)?.data ?? []
+    },
+  })
+  const jobs: any[] = Array.isArray(jobsData) ? jobsData : []
+  const latestJob = jobs[0]
+
+  const startBulk = async () => {
+    setBulkLoading(true)
+    try {
+      const res: any = await api.post('/api/v1/fees/receipts/bulk-generate', {
+        template: (settings?.receipt_template as string) || 'classic',
+        send_email: true,
+        school_name: settings?.school_name || schoolName || 'School',
+      })
+      const job = (res as any)?.data
+      if (job?.id) {
+        setBulkJobId(job.id)
+        qc.invalidateQueries({ queryKey: ['bulk-receipt-jobs'] })
+      }
+    } catch { /* user sees nothing on error — button re-enables */ }
+    finally { setBulkLoading(false) }
+  }
+
+  const sendEmail = useMutation({
+    mutationFn: (receiptId: string) => api.post(`/api/v1/fees/receipts/${receiptId}/send-email`, {}) as any,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['receipts'] }),
+  })
+  const regenerate = useMutation({
+    mutationFn: (receiptId: string) => api.post(`/api/v1/fees/receipts/${receiptId}/regenerate`, {}) as any,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['receipts'] }); qc.invalidateQueries({ queryKey: ['bulk-receipt-jobs'] }) },
+  })
+  const deleteReceipt = useMutation({
+    mutationFn: (receiptId: string) => api.delete(`/api/v1/fees/receipts/${receiptId}`) as any,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['receipts'] }),
+  })
+
+  // We'll load receipts per student only when we have a student search.
+  // For the "all receipts" view we list latest bulk job receipts via polling.
+  // Actually let's just show bulk job history + ability to view/email/regen
+  const showActiveJob = bulkJobId || (latestJob && (latestJob.status === 'running' || latestJob.status === 'pending'))
+  const activeJobId = bulkJobId || (showActiveJob ? latestJob?.id : null)
+
+  return (
+    <div className="space-y-4">
+      {/* Bulk generate header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-gray-800">Bulk Receipt Generation</p>
+          <p className="text-xs text-gray-500 mt-0.5">Generate PDF receipts for all paid/partial invoices and send via email</p>
+        </div>
+        <button
+          onClick={startBulk}
+          disabled={bulkLoading || (showActiveJob && latestJob?.status === 'running')}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 disabled:opacity-50 transition"
+        >
+          {bulkLoading ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
+          Bulk Generate
+        </button>
+      </div>
+
+      {/* Active job progress */}
+      {activeJobId && (
+        <BulkJobProgress
+          jobId={activeJobId}
+          onDone={() => {
+            setBulkJobId(null)
+            qc.invalidateQueries({ queryKey: ['bulk-receipt-jobs'] })
+          }}
+        />
+      )}
+
+      {/* Past jobs */}
+      {jobs.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Past Jobs</p>
+          <div className="space-y-2">
+            {jobs.slice(0, 5).map((job: any) => (
+              <div key={job.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                <div className="flex items-center gap-2">
+                  {job.status === 'done'
+                    ? <CheckCircle2 size={14} className="text-emerald-500" />
+                    : job.status === 'failed'
+                    ? <AlertCircle size={14} className="text-red-500" />
+                    : <Loader2 size={14} className="text-indigo-500 animate-spin" />}
+                  <div>
+                    <p className="text-xs font-medium text-gray-800 capitalize">{job.status} — {job.completed}/{job.total} receipts</p>
+                    <p className="text-[10px] text-gray-400">{new Date(job.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                </div>
+                {job.failed > 0 && (
+                  <span className="text-[10px] bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full">{job.failed} failed</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {jobs.length === 0 && !showActiveJob && (
+        <div className="flex flex-col items-center justify-center py-12 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center mb-3">
+            <Receipt size={22} className="text-indigo-500" />
+          </div>
+          <p className="text-sm font-medium text-gray-600">No receipts generated yet</p>
+          <p className="text-xs text-gray-400 mt-1">Click "Bulk Generate" to create receipts for all paid invoices</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function FeesPage() {
   const qc = useQueryClient()
+  const [tab, setTab] = useState<'invoices' | 'receipts'>('invoices')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [showGenerate, setShowGenerate] = useState(false)
@@ -295,6 +496,7 @@ export default function FeesPage() {
     },
   })
   const preferredTemplate: ReceiptTemplate = (settings?.receipt_template as ReceiptTemplate) ?? 'classic'
+  const schoolName: string = settings?.school_name ?? 'School'
 
   const generateReceipt = useMutation({
     mutationFn: (inv: any) =>
@@ -391,16 +593,38 @@ export default function FeesPage() {
           <p className="text-sm text-gray-500 mt-1">{total} invoices total</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={exportInvoices} disabled={invoices.length === 0}
-            className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40 transition">
-            <Download size={15} /> Export CSV
-          </button>
-          <button onClick={() => setShowGenerate(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition">
-            <Plus size={16} /> Generate Invoice
-          </button>
+          {tab === 'invoices' && (
+            <>
+              <button onClick={exportInvoices} disabled={invoices.length === 0}
+                className="flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-40 transition">
+                <Download size={15} /> Export CSV
+              </button>
+              <button onClick={() => setShowGenerate(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition">
+                <Plus size={16} /> Generate Invoice
+              </button>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+        {(['invoices', 'receipts'] as const).map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition capitalize ${tab === t ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-600 hover:text-gray-800'}`}>
+            {t === 'invoices' ? 'Invoices' : 'Receipts & PDF'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'receipts' && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <ReceiptsPanel schoolName={schoolName} />
+        </div>
+      )}
+
+      {tab === 'invoices' && (<>
 
       {/* Summary */}
       <div className="grid grid-cols-3 gap-4">
@@ -524,6 +748,7 @@ export default function FeesPage() {
           </>
         )}
       </div>
+      </>)}
     </div>
   )
 }

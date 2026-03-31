@@ -135,6 +135,30 @@ class FeeReceiptResponse(BaseModel):
     generated_by: Optional[UUID]
     is_deleted: bool
     created_at: datetime
+    pdf_url: Optional[str] = None
+    email_sent: Optional[bool] = False
+    email_sent_at: Optional[datetime] = None
+    generation_status: Optional[str] = "pending"
+    generation_error: Optional[str] = None
     # resolved invoice details for rendering
     invoices: List[InvoiceResponse] = []
+    model_config = {"from_attributes": True}
+
+
+class BulkGenerateReceiptsRequest(BaseModel):
+    template: str = "classic"
+    send_email: bool = True
+    school_name: str = "School"
+
+
+class BulkReceiptJobResponse(BaseModel):
+    id: UUID
+    created_at: datetime
+    total: int
+    completed: int
+    failed: int
+    status: str        # pending|running|done|failed
+    template: str
+    send_email: bool
+    error_log: List[dict] = []
     model_config = {"from_attributes": True}
