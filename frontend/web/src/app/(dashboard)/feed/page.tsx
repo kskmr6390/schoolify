@@ -6,7 +6,7 @@ import {
   Heart, Megaphone, Calendar, Users, Globe2, BookOpen,
   GraduationCap, UserCheck, Send, Trash2, X, Loader2,
   Image as ImageIcon, Video, Paperclip, Play, Smile,
-  Pin, MessageSquare, Share2, ChevronDown, Sparkles,
+  Pin, MessageSquare, Share2, ChevronDown, Sparkles, Trophy,
 } from 'lucide-react'
 import { useAuthStore } from '../../../store/authStore'
 import api from '../../../lib/api'
@@ -38,6 +38,13 @@ const TYPE_CFG = {
   event: {
     label: 'Event', icon: Calendar,
     gradient: 'from-amber-400 to-orange-500',
+    pill: 'bg-amber-100 text-amber-700 border-amber-200',
+    accent: 'border-l-amber-500',
+    glow: 'bg-amber-50/30',
+  },
+  award: {
+    label: 'Award', icon: Trophy,
+    gradient: 'from-amber-500 to-rose-500',
     pill: 'bg-amber-100 text-amber-700 border-amber-200',
     accent: 'border-l-amber-500',
     glow: 'bg-amber-50/30',
@@ -336,6 +343,21 @@ function PostCard({ post, onDelete }: { post: any; onDelete: (id: string) => voi
         </div>
       )}
 
+      {/* Special award banner */}
+      {type === 'award' && (
+        <div className="px-5 py-4 bg-gradient-to-r from-amber-500 to-rose-500 text-white flex items-center gap-3 relative overflow-hidden">
+          <div className="absolute -top-4 -right-4 w-20 h-20 bg-white/10 rounded-full" />
+          <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+            <Trophy size={20} className="text-white" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-sm font-bold">Award Certificate</span>
+            <p className="text-amber-100 text-xs mt-0.5 truncate">{post.content?.split('—')[0]?.trim()}</p>
+          </div>
+          <Sparkles size={18} className="text-white/60 flex-shrink-0" />
+        </div>
+      )}
+
       <div className={cn('p-5', cfg.glow)}>
         {/* Author row */}
         <div className="flex items-start justify-between mb-3">
@@ -434,11 +456,12 @@ function PostCard({ post, onDelete }: { post: any; onDelete: (id: string) => voi
 
 // ── Category strip ────────────────────────────────────────────────────────────
 const FILTERS = [
-  { v: '',             l: 'All',           grad: 'from-indigo-500 to-violet-600', icon: Sparkles },
-  { v: 'announcement', l: 'Announcements', grad: 'from-indigo-500 to-violet-600', icon: Megaphone },
-  { v: 'meeting',      l: 'Meetings',      grad: 'from-emerald-500 to-teal-600',  icon: UserCheck },
-  { v: 'event',        l: 'Events',        grad: 'from-amber-400 to-orange-500',  icon: Calendar },
-  { v: 'general',      l: 'General',       grad: 'from-slate-500 to-slate-600',   icon: Globe2 },
+  { v: '',             l: 'All',           grad: 'from-indigo-500 to-violet-600',  icon: Sparkles },
+  { v: 'announcement', l: 'Announcements', grad: 'from-indigo-500 to-violet-600',  icon: Megaphone },
+  { v: 'award',        l: 'Awards',        grad: 'from-amber-500 to-rose-500',     icon: Trophy },
+  { v: 'meeting',      l: 'Meetings',      grad: 'from-emerald-500 to-teal-600',   icon: UserCheck },
+  { v: 'event',        l: 'Events',        grad: 'from-amber-400 to-orange-500',   icon: Calendar },
+  { v: 'general',      l: 'General',       grad: 'from-slate-500 to-slate-600',    icon: Globe2 },
 ]
 
 // ── Main page ─────────────────────────────────────────────────────────────────

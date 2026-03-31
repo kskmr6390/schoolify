@@ -43,3 +43,12 @@ class StaffProfile(TenantAwareModel):
     salary_type = Column(String(20), default="monthly")  # monthly / annual
     staff_type = Column(String(50), default="teaching")  # teaching / non_teaching / admin
     leave_balance = Column(Integer, default=12)
+
+
+class ParentStudentLink(TenantAwareModel):
+    """Links a parent user to one or more student users."""
+    __tablename__ = "parent_student_links"
+
+    parent_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    student_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    relationship = Column(String(50), default="parent")   # father, mother, guardian

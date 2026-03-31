@@ -60,10 +60,7 @@ export function AdminDashboard() {
         { name: 'Present', value: latestAttDay.present },
         { name: 'Absent', value: latestAttDay.absent },
       ]
-    : [
-        { name: 'Present', value: 68 },
-        { name: 'Absent', value: 12 },
-      ]
+    : []
 
   // Fee chart: map billed → outstanding
   const feeChartData = feeMonthly.map((r: any) => ({
@@ -82,7 +79,6 @@ export function AdminDashboard() {
           label="Total Students"
           value={overview.total_students || 0}
           icon={Users}
-          trend={{ value: 3.2, label: 'vs last month' }}
           colorClass="bg-indigo-50 text-indigo-600"
           loading={isLoading}
         />
@@ -97,7 +93,6 @@ export function AdminDashboard() {
           label="Fee Collected"
           value={formatCurrency(overview.fee_collected || 0)}
           icon={CreditCard}
-          trend={{ value: 2.8, label: 'vs last month' }}
           colorClass="bg-amber-50 text-amber-600"
           loading={isLoading}
         />
@@ -105,7 +100,6 @@ export function AdminDashboard() {
           label="Attendance Rate"
           value={formatPercent(attendanceRate)}
           icon={BarChart3}
-          trend={{ value: -1.2, label: 'vs yesterday' }}
           colorClass="bg-rose-50 text-rose-600"
           loading={isLoading}
         />

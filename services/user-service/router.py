@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from uuid import UUID
@@ -7,7 +8,7 @@ from typing import Optional
 from services.shared.database import get_db
 from services.shared.security import get_current_user, require_roles, TokenData
 from services.shared.schemas import StandardResponse
-from services.user_service.models import UserProfile, StaffProfile
+from services.user_service.models import UserProfile, StaffProfile, ParentStudentLink
 from services.user_service.schemas import (
     UserProfileCreate, UserProfileUpdate, UserProfileResponse,
     StaffProfileCreate, StaffProfileUpdate, StaffProfileResponse,
@@ -229,3 +230,227 @@ async def list_staff(
         })
 
     return StandardResponse(success=True, data=result)
+
+
+# ─── Chat Users ───────────────────────────────────────────────────────────────
+
+@router.get("/chat-users", response_model=StandardResponse)
+async def list_chat_users(
+    current_user: TokenData = Depends(require_roles("admin", "super_admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all active staff users (excluding self) available to chat with."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    uid = UUIDT(current_user.user_id)
+
+    rows = (await db.execute(text("""
+        SELECT u.id, u.first_name, u.last_name, u.email, LOWER(u.role::text) AS role
+        FROM users u
+        WHERE u.tenant_id = :tid
+          AND u.id != :uid
+          AND LOWER(u.role::text) IN ('teacher', 'admin', 'super_admin')
+          AND u.status = 'active'
+        ORDER BY u.first_name, u.last_name
+    """), {"tid": tid, "uid": uid})).fetchall()
+
+    return StandardResponse(success=True, data=[
+        {"id": str(r[0]), "name": f"{r[1]} {r[2]}".strip(), "email": r[3], "role": r[4]}
+        for r in rows
+    ])
+
+
+# ── Parent-Student Links ───────────────────────────────────────────────────────
+
+class ParentLinkRequest(BaseModel):
+    parent_id: str
+    student_id: str
+    relationship: str = "parent"
+
+
+@router.post("/parent-links", response_model=StandardResponse, status_code=201)
+async def create_parent_link(
+    payload: ParentLinkRequest,
+    current_user: TokenData = Depends(require_roles("admin", "super_admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Link a parent user to a student. Creates the parent account if it doesn't exist."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    parent_id = UUIDT(payload.parent_id)
+    student_id = UUIDT(payload.student_id)
+
+    # Check duplicate
+    existing = await db.execute(
+        select(ParentStudentLink).where(
+            ParentStudentLink.parent_id == parent_id,
+            ParentStudentLink.student_id == student_id,
+            ParentStudentLink.tenant_id == tid,
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Link already exists")
+
+    link = ParentStudentLink(
+        tenant_id=tid,
+        parent_id=parent_id,
+        student_id=student_id,
+        relationship=payload.relationship,
+    )
+    db.add(link)
+    await db.commit()
+    return StandardResponse(success=True, data={
+        "parent_id": str(parent_id),
+        "student_id": str(student_id),
+        "relationship": payload.relationship,
+    })
+
+
+@router.get("/parent-links/my-children", response_model=StandardResponse)
+async def get_my_children(
+    current_user: TokenData = Depends(require_roles("parent")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all students linked to the current parent user."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    parent_id = UUIDT(current_user.user_id)
+
+    links = await db.execute(
+        select(ParentStudentLink).where(
+            ParentStudentLink.parent_id == parent_id,
+            ParentStudentLink.tenant_id == tid,
+        )
+    )
+    link_rows = links.scalars().all()
+    if not link_rows:
+        return StandardResponse(success=True, data=[])
+
+    student_ids = [str(lnk.student_id) for lnk in link_rows]
+    rel_map = {str(lnk.student_id): lnk.relationship for lnk in link_rows}
+
+    rows = (await db.execute(text("""
+        SELECT u.id, u.first_name, u.last_name, u.email, u.status::text,
+               sp.employee_id, s.student_code, s.class_id, s.grade
+        FROM users u
+        LEFT JOIN staff_profiles sp ON sp.user_id = u.id AND sp.tenant_id = :tid
+        LEFT JOIN students s ON s.user_id = u.id AND s.tenant_id = :tid
+        WHERE u.tenant_id = :tid AND u.id = ANY(:ids)
+    """), {"tid": tid, "ids": [UUIDT(sid) for sid in student_ids]})).fetchall()
+
+    result = []
+    for r in rows:
+        sid = str(r[0])
+        result.append({
+            "id": sid,
+            "first_name": r[1],
+            "last_name": r[2],
+            "email": r[3],
+            "status": r[4],
+            "student_code": r[6],
+            "class_id": str(r[7]) if r[7] else None,
+            "grade": r[8],
+            "relationship": rel_map.get(sid, "parent"),
+        })
+    return StandardResponse(success=True, data=result)
+
+
+@router.get("/parent-links/{student_id}/parents", response_model=StandardResponse)
+async def get_student_parents(
+    student_id: UUID,
+    current_user: TokenData = Depends(require_roles("admin", "super_admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all parents linked to a specific student."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    links = await db.execute(
+        select(ParentStudentLink).where(
+            ParentStudentLink.student_id == student_id,
+            ParentStudentLink.tenant_id == tid,
+        )
+    )
+    link_rows = links.scalars().all()
+    if not link_rows:
+        return StandardResponse(success=True, data=[])
+
+    parent_ids = [lnk.parent_id for lnk in link_rows]
+    rel_map = {str(lnk.parent_id): lnk.relationship for lnk in link_rows}
+
+    rows = (await db.execute(text("""
+        SELECT u.id, u.first_name, u.last_name, u.email, u.status::text
+        FROM users u
+        WHERE u.tenant_id = :tid AND u.id = ANY(:ids)
+        ORDER BY u.first_name
+    """), {"tid": tid, "ids": parent_ids})).fetchall()
+
+    return StandardResponse(success=True, data=[
+        {
+            "id": str(r[0]),
+            "first_name": r[1],
+            "last_name": r[2],
+            "email": r[3],
+            "status": r[4],
+            "relationship": rel_map.get(str(r[0]), "parent"),
+        }
+        for r in rows
+    ])
+
+
+@router.delete("/parent-links", response_model=StandardResponse)
+async def delete_parent_link(
+    parent_id: str,
+    student_id: str,
+    current_user: TokenData = Depends(require_roles("admin", "super_admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    result = await db.execute(
+        select(ParentStudentLink).where(
+            ParentStudentLink.parent_id == UUIDT(parent_id),
+            ParentStudentLink.student_id == UUIDT(student_id),
+            ParentStudentLink.tenant_id == tid,
+        )
+    )
+    link = result.scalar_one_or_none()
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    await db.delete(link)
+    await db.commit()
+    return StandardResponse(success=True, data={"message": "Link removed"})
+
+
+@router.get("/students-list", response_model=StandardResponse)
+async def list_students(
+    current_user: TokenData = Depends(require_roles("admin", "super_admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all active students for award/parent-link selection."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    rows = (await db.execute(text("""
+        SELECT u.id, u.first_name, u.last_name, u.email,
+               s.student_code, s.grade
+        FROM users u
+        LEFT JOIN students s ON s.user_id = u.id AND s.tenant_id = :tid
+        WHERE u.tenant_id = :tid
+          AND LOWER(u.role::text) = 'student'
+          AND u.status = 'active'
+        ORDER BY u.first_name, u.last_name
+    """), {"tid": tid})).fetchall()
+
+    return StandardResponse(success=True, data=[
+        {
+            "id": str(r[0]),
+            "first_name": r[1],
+            "last_name": r[2],
+            "name": f"{r[1]} {r[2]}".strip(),
+            "email": r[3],
+            "student_code": r[4],
+            "grade": r[5],
+        }
+        for r in rows
+    ])

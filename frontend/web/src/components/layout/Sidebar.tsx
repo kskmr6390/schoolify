@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import {
   BarChart3, Bell, Bot, BookOpen, Briefcase, CalendarDays, ClipboardCheck, CreditCard,
   FileText, GraduationCap, IndianRupee, LayoutDashboard, LogOut,
-  Megaphone, MessageCircle, Plus, ScrollText, Settings, ShieldCheck, UserCog, Users, X,
+  Megaphone, MessageCircle, Plus, ScrollText, Settings, ShieldCheck, Trophy, UserCog, Users, X,
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useDashboardStore } from '../../store/dashboardStore'
@@ -22,6 +22,7 @@ interface NavItem {
 const ADMIN_NAV: NavItem[] = [
   { label: 'Dashboard',      icon: LayoutDashboard, href: '/dashboard' },
   { label: 'Feed',           icon: Megaphone,       href: '/feed' },
+  { label: 'Awards',         icon: Trophy,          href: '/awards' },
   { label: 'Students',       icon: Users,           href: '/students' },
   { label: 'Teachers',       icon: GraduationCap,   href: '/teachers' },
   { label: 'Staff',          icon: UserCog,         href: '/staff' },
@@ -44,6 +45,7 @@ const ADMIN_NAV: NavItem[] = [
 const TEACHER_NAV: NavItem[] = [
   { label: 'Dashboard',     icon: LayoutDashboard, href: '/dashboard' },
   { label: 'Feed',          icon: Megaphone,       href: '/feed' },
+  { label: 'Awards',        icon: Trophy,          href: '/awards' },
   { label: 'My Classes',    icon: BookOpen,        href: '/classes' },
   { label: 'Students',      icon: Users,           href: '/students' },
   { label: 'Attendance',    icon: ClipboardCheck,  href: '/attendance' },
@@ -56,6 +58,7 @@ const TEACHER_NAV: NavItem[] = [
 const STUDENT_NAV: NavItem[] = [
   { label: 'Dashboard',     icon: LayoutDashboard, href: '/dashboard' },
   { label: 'Feed',          icon: Megaphone,       href: '/feed' },
+  { label: 'My Awards',     icon: Trophy,          href: '/awards' },
   { label: 'Timetable',     icon: BookOpen,        href: '/timetable' },
   { label: 'Assignments',   icon: FileText,        href: '/assignments' },
   { label: 'Results',       icon: BarChart3,       href: '/results' },
@@ -65,13 +68,14 @@ const STUDENT_NAV: NavItem[] = [
 ]
 
 const PARENT_NAV: NavItem[] = [
-  { label: 'Dashboard',      icon: LayoutDashboard, href: '/dashboard' },
-  { label: 'Feed',           icon: Megaphone,       href: '/feed' },
-  { label: "Child's Progress", icon: BarChart3,     href: '/progress' },
-  { label: 'Attendance',     icon: ClipboardCheck,  href: '/attendance' },
-  { label: 'Results',        icon: FileText,        href: '/results' },
-  { label: 'Fees',           icon: CreditCard,      href: '/fees' },
-  { label: 'Notifications',  icon: Bell,            href: '/notifications' },
+  { label: 'Dashboard',       icon: LayoutDashboard, href: '/dashboard' },
+  { label: 'Feed',            icon: Megaphone,       href: '/feed' },
+  { label: "Child's Progress",icon: BarChart3,       href: '/progress' },
+  { label: "Awards",          icon: Trophy,          href: '/awards' },
+  { label: 'Attendance',      icon: ClipboardCheck,  href: '/attendance' },
+  { label: 'Results',         icon: FileText,        href: '/results' },
+  { label: 'Fees',            icon: CreditCard,      href: '/fees' },
+  { label: 'Notifications',   icon: Bell,            href: '/notifications' },
 ]
 
 const NAV_BY_ROLE: Record<string, NavItem[]> = {

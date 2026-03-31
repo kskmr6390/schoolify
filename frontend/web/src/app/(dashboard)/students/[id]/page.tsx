@@ -7,6 +7,7 @@ import {
   ClipboardCheck, CreditCard, FileText, Award, AlertCircle,
   CheckCircle, Clock, TrendingUp, Download, Eye, Receipt,
   Trash2, RefreshCw, CheckSquare, Square, Layers, X, Loader2,
+  Trophy, Users, Plus, Star, Sparkles,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
@@ -15,7 +16,7 @@ import api from '../../../../lib/api'
 import { formatDate, formatCurrency, ATTENDANCE_STATUS_COLORS, INVOICE_STATUS_COLORS } from '../../../../lib/utils'
 import FeeReceiptModal, { type FeeReceiptData, type ReceiptTemplate } from '../../../../components/FeeReceiptModal'
 
-type TabKey = 'overview' | 'attendance' | 'results' | 'fees' | 'documents'
+type TabKey = 'overview' | 'attendance' | 'results' | 'fees' | 'documents' | 'awards' | 'parents'
 
 const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'overview',    label: 'Overview',    icon: User },
@@ -23,6 +24,8 @@ const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'results',     label: 'Results',     icon: Award },
   { key: 'fees',        label: 'Fees',        icon: CreditCard },
   { key: 'documents',   label: 'Documents',   icon: FileText },
+  { key: 'awards',      label: 'Awards',      icon: Trophy },
+  { key: 'parents',     label: 'Parents',     icon: Users },
 ]
 
 // ─── Attendance Tab ───────────────────────────────────────────────────────────
@@ -672,6 +675,195 @@ function DocumentsTab({ studentId }: { studentId: string }) {
   )
 }
 
+// ─── Awards Tab ───────────────────────────────────────────────────────────────
+const AWARD_ICON_MAP: Record<string, React.ElementType> = {
+  trophy: Trophy, star: Star, award: Award, sparkles: Sparkles,
+}
+const AWARD_CAT_COLORS: Record<string, string> = {
+  Academic: 'bg-blue-100 text-blue-700',
+  Sports: 'bg-green-100 text-green-700',
+  Behavior: 'bg-purple-100 text-purple-700',
+  Attendance: 'bg-teal-100 text-teal-700',
+  'Art & Culture': 'bg-pink-100 text-pink-700',
+  Leadership: 'bg-orange-100 text-orange-700',
+  Other: 'bg-gray-100 text-gray-600',
+}
+
+function AwardsTab({ studentId }: { studentId: string }) {
+  const { data } = useQuery({
+    queryKey: ['student-awards', studentId],
+    queryFn: () => api.get(`/api/v1/notifications/awards?recipient_id=${studentId}`) as any,
+  })
+  const awards: any[] = (data as any)?.data ?? []
+
+  if (awards.length === 0) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 py-16 flex flex-col items-center text-gray-400 gap-2">
+        <Trophy size={36} className="text-gray-200" />
+        <p className="font-semibold text-gray-500">No awards yet</p>
+        <p className="text-sm">Awards given from the Awards section will appear here</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-4 mb-2">
+        {[
+          { label: 'Total', value: awards.length, color: 'text-amber-500', bg: 'bg-amber-50', icon: Trophy },
+          { label: 'Categories', value: new Set(awards.map((a: any) => a.category)).size, color: 'text-violet-500', bg: 'bg-violet-50', icon: Sparkles },
+          { label: 'This Month', value: awards.filter((a: any) => new Date(a.created_at) > new Date(Date.now() - 30*86400000)).length, color: 'text-emerald-500', bg: 'bg-emerald-50', icon: Star },
+        ].map(s => (
+          <div key={s.label} className="bg-white rounded-xl border border-gray-100 p-4 flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${s.bg}`}>
+              <s.icon size={18} className={s.color} />
+            </div>
+            <div>
+              <p className="text-lg font-bold text-gray-900">{s.value}</p>
+              <p className="text-xs text-gray-500">{s.label}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {awards.map((a: any) => {
+          const Icon = AWARD_ICON_MAP[a.icon] ?? Trophy
+          const catColor = AWARD_CAT_COLORS[a.category ?? ''] ?? 'bg-gray-100 text-gray-600'
+          return (
+            <div key={a.id} className="bg-white rounded-xl border border-gray-100 p-4 flex gap-4 hover:shadow-sm transition">
+              <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center flex-shrink-0">
+                <Icon size={22} className="text-amber-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-gray-900 truncate">{a.title}</p>
+                {a.description && <p className="text-xs text-gray-500 mt-0.5">{a.description}</p>}
+                <div className="flex items-center gap-2 mt-2">
+                  {a.category && <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${catColor}`}>{a.category}</span>}
+                  <span className="text-xs text-gray-400">By {a.awarded_by_name}</span>
+                </div>
+                <p className="text-xs text-gray-300 mt-1">{new Date(a.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── Parents Tab ──────────────────────────────────────────────────────────────
+function ParentsTab({ studentId }: { studentId: string }) {
+  const qc = useQueryClient()
+  const [email, setEmail] = useState('')
+  const [relationship, setRelationship] = useState('parent')
+  const [error, setError] = useState('')
+
+  const { data: parentsData, isLoading } = useQuery({
+    queryKey: ['student-parents', studentId],
+    queryFn: () => api.get(`/api/v1/users/parent-links/${studentId}/parents`) as any,
+  })
+  const parents: any[] = (parentsData as any)?.data ?? []
+
+  // Lookup parent user ID from email, then link
+  const linkMutation = useMutation({
+    mutationFn: async () => {
+      setError('')
+      // Find parent user by email via auth users search
+      const res = await api.get(`/api/v1/auth/users?email=${encodeURIComponent(email)}&role=parent`) as any
+      const found = res?.data?.items?.[0] ?? res?.data?.[0]
+      if (!found) throw new Error('No parent account found with this email. Create a parent account first.')
+      await api.post('/api/v1/users/parent-links', {
+        parent_id: found.id,
+        student_id: studentId,
+        relationship,
+      })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['student-parents', studentId] })
+      setEmail('')
+    },
+    onError: (e: any) => setError(e.message ?? 'Failed to link parent'),
+  })
+
+  const unlinkMutation = useMutation({
+    mutationFn: (parentId: string) => api.delete(`/api/v1/users/parent-links?parent_id=${parentId}&student_id=${studentId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['student-parents', studentId] }),
+  })
+
+  return (
+    <div className="space-y-5">
+      {/* Link parent form */}
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <Plus size={15} className="text-indigo-500" /> Link Parent Account
+        </h4>
+        {error && (
+          <div className="mb-3 px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">{error}</div>
+        )}
+        <div className="flex gap-3 flex-wrap">
+          <input
+            value={email} onChange={e => setEmail(e.target.value)}
+            placeholder="Parent email address"
+            className="flex-1 min-w-48 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <select value={relationship} onChange={e => setRelationship(e.target.value)}
+            className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+            <option value="parent">Parent</option>
+            <option value="father">Father</option>
+            <option value="mother">Mother</option>
+            <option value="guardian">Guardian</option>
+          </select>
+          <button
+            onClick={() => linkMutation.mutate()}
+            disabled={!email.trim() || linkMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium disabled:opacity-50 hover:bg-indigo-700 transition"
+          >
+            {linkMutation.isPending ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />}
+            Link
+          </button>
+        </div>
+        <p className="text-xs text-gray-400 mt-2">The parent must already have an account with role = parent. Use the Users section to create one first.</p>
+      </div>
+
+      {/* Linked parents list */}
+      <div className="bg-white rounded-xl border border-gray-100 p-5">
+        <h4 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          <Users size={15} className="text-indigo-500" /> Linked Parents ({parents.length})
+        </h4>
+        {isLoading ? (
+          <p className="text-sm text-gray-400">Loading...</p>
+        ) : parents.length === 0 ? (
+          <div className="flex flex-col items-center py-8 text-gray-400 gap-2">
+            <Users size={28} className="text-gray-200" />
+            <p className="text-sm">No parents linked yet</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {parents.map((p: any) => (
+              <div key={p.id} className="flex items-center gap-4 p-3 rounded-xl border border-gray-100 hover:border-indigo-100 transition">
+                <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-bold text-indigo-700 flex-shrink-0">
+                  {p.first_name?.[0]}{p.last_name?.[0]}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-gray-900 text-sm">{p.first_name} {p.last_name}</p>
+                  <p className="text-xs text-gray-400">{p.email} · <span className="capitalize">{p.relationship}</span></p>
+                </div>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
+                  {p.status}
+                </span>
+                <button onClick={() => unlinkMutation.mutate(p.id)}
+                  className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition">
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function StudentDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -891,6 +1083,8 @@ export default function StudentDetailPage() {
       {activeTab === 'results' && <ResultsTab studentId={id} />}
       {activeTab === 'fees' && <FeesTab studentId={id} student={student} />}
       {activeTab === 'documents' && <DocumentsTab studentId={id} />}
+      {activeTab === 'awards' && <AwardsTab studentId={id} />}
+      {activeTab === 'parents' && <ParentsTab studentId={id} />}
     </div>
   )
 }

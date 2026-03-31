@@ -70,3 +70,37 @@ class DeviceToken(TenantAwareModel):
     platform = Column(String(10), nullable=False)   # ios, android, web
     is_active = Column(Boolean, default=True)
     last_used_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ChatConversation(TenantAwareModel):
+    __tablename__ = "chat_conversations"
+
+    type = Column(String(10), nullable=False, default="direct")   # direct | group
+    name = Column(String(200), nullable=True)                     # group chat name
+    participants = Column(JSONB, default=[])                      # list of user ID strings
+    created_by = Column(UUID(as_uuid=True), nullable=False)
+
+
+class ChatMessage(TenantAwareModel):
+    __tablename__ = "chat_messages"
+
+    conversation_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    sender_id = Column(UUID(as_uuid=True), nullable=False)
+    sender_name = Column(String(200), nullable=False)
+    text = Column(Text, nullable=False)
+    type = Column(String(20), default="text")   # text | system
+
+
+class Award(TenantAwareModel):
+    __tablename__ = "awards"
+
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    icon = Column(String(50), default="trophy")          # trophy, star, medal, sparkles, etc.
+    category = Column(String(100), nullable=True)        # academic, sports, behavior, attendance, art
+    recipient_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    recipient_name = Column(String(200), nullable=False)
+    recipient_class = Column(String(100), nullable=True)
+    awarded_by_id = Column(UUID(as_uuid=True), nullable=False)
+    awarded_by_name = Column(String(200), nullable=False)
+    shared_to_feed = Column(Boolean, default=True)
