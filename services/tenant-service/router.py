@@ -121,6 +121,40 @@ async def list_tenants(
     )
 
 
+@router.get("/settings", response_model=StandardResponse[dict])
+async def get_my_settings_alias(
+    current_user=Depends(require_roles("super_admin", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Alias: GET /api/v1/settings → tenant settings (used by frontend settings page)."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    result = await db.execute(select(TenantSetting).where(TenantSetting.tenant_id == tid))
+    settings = result.scalars().all()
+    return StandardResponse.ok({s.key: s.value for s in settings})
+
+
+@router.patch("/settings", response_model=StandardResponse[dict])
+async def patch_my_settings_alias(
+    body: TenantSettingsUpdate,
+    current_user=Depends(require_roles("super_admin", "admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Alias: PATCH /api/v1/settings → update tenant settings."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    for key, value in body.settings.items():
+        result = await db.execute(
+            select(TenantSetting).where(and_(TenantSetting.tenant_id == tid, TenantSetting.key == key))
+        )
+        setting = result.scalar_one_or_none()
+        if setting:
+            setting.value = value
+        else:
+            db.add(TenantSetting(tenant_id=tid, key=key, value=value))
+    return StandardResponse.ok({"message": "Settings updated"})
+
+
 @router.get("/by-slug/{slug}", response_model=StandardResponse[TenantBrandingResponse])
 async def get_tenant_by_slug(slug: str, db: AsyncSession = Depends(get_db)):
     """
