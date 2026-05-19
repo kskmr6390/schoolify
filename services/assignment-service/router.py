@@ -245,6 +245,7 @@ async def get_submissions(
 
 
 @router.put("/submissions/{submission_id}/grade", response_model=StandardResponse[SubmissionResponse])
+@router.patch("/submissions/{submission_id}/grade", response_model=StandardResponse[SubmissionResponse])
 async def grade_submission(
     submission_id: UUID,
     body: GradeSubmissionRequest,

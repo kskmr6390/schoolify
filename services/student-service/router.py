@@ -322,6 +322,7 @@ async def get_student(
 
 
 @router.put("/students/{student_id}", response_model=StandardResponse[StudentResponse])
+@router.patch("/students/{student_id}", response_model=StandardResponse[StudentResponse])
 async def update_student(
     student_id: UUID,
     body: StudentUpdate,
@@ -337,10 +338,7 @@ async def update_student(
         raise HTTPException(status_code=404, detail="Student not found")
 
     for field, value in body.model_dump(exclude_none=True).items():
-        if isinstance(value, dict):
-            setattr(student, field, value)  # JSONB fields
-        else:
-            setattr(student, field, value)
+        setattr(student, field, value)
 
     return StandardResponse.ok(StudentResponse.model_validate(student))
 

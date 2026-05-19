@@ -116,6 +116,7 @@ async def get_me(
 
 
 @router.put("/me", response_model=StandardResponse[UserProfile])
+@router.patch("/me", response_model=StandardResponse[UserProfile])
 async def update_me(
     body: UpdateProfileRequest,
     current_user=Depends(get_current_user),

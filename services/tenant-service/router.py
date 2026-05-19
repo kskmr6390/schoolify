@@ -196,6 +196,7 @@ async def get_tenant(
 
 
 @router.put("/{tenant_id}", response_model=StandardResponse[TenantResponse])
+@router.patch("/{tenant_id}", response_model=StandardResponse[TenantResponse])
 async def update_tenant(
     tenant_id: UUID,
     body: UpdateTenantRequest,
@@ -315,6 +316,7 @@ async def get_settings(
 
 
 @router.put("/{tenant_id}/settings", response_model=StandardResponse[dict])
+@router.patch("/{tenant_id}/settings", response_model=StandardResponse[dict])
 async def update_settings(
     tenant_id: UUID,
     body: TenantSettingsUpdate,
@@ -349,6 +351,7 @@ async def get_feature_flags(
 
 
 @router.put("/{tenant_id}/feature-flags/{flag_name}", response_model=StandardResponse[dict])
+@router.patch("/{tenant_id}/feature-flags/{flag_name}", response_model=StandardResponse[dict])
 async def update_feature_flag(
     tenant_id: UUID,
     flag_name: str,

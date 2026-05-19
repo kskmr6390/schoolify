@@ -137,6 +137,7 @@ async def get_preferences(
 
 
 @router.put("/preferences", response_model=StandardResponse[dict])
+@router.patch("/preferences", response_model=StandardResponse[dict])
 async def update_preferences(
     body: PreferenceUpdate,
     current_user=Depends(get_current_user),
@@ -501,3 +502,43 @@ async def delete_award(
         raise HTTPException(status_code=404, detail="Award not found")
     await db.delete(award)
     return StandardResponse.ok({"message": "Award deleted"})
+
+
+class UpdateAwardRequest(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    category: Optional[str] = None
+    shared_to_feed: Optional[bool] = None
+
+
+@router.patch("/awards/{award_id}", response_model=StandardResponse)
+async def update_award(
+    award_id: UUID,
+    body: UpdateAwardRequest,
+    current_user=Depends(require_roles("admin", "super_admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    result = await db.execute(
+        select(Award).where(and_(Award.id == award_id, Award.tenant_id == tid))
+    )
+    award = result.scalar_one_or_none()
+    if not award:
+        raise HTTPException(status_code=404, detail="Award not found")
+    set_fields = body.model_fields_set
+    if 'title' in set_fields and body.title:
+        award.title = body.title
+    if 'description' in set_fields:
+        # Empty string → explicitly cleared; None → explicitly nulled
+        award.description = body.description or None
+    if 'icon' in set_fields and body.icon:
+        award.icon = body.icon
+    if 'category' in set_fields and body.category:
+        award.category = body.category
+    if 'shared_to_feed' in set_fields and body.shared_to_feed is not None:
+        award.shared_to_feed = body.shared_to_feed
+    await db.flush()
+    await db.refresh(award)
+    return StandardResponse.ok(_award_to_dict(award))

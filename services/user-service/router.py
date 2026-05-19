@@ -62,6 +62,7 @@ async def create_profile(
 
 
 @router.put("/profiles/me", response_model=StandardResponse)
+@router.patch("/profiles/me", response_model=StandardResponse)
 async def update_my_profile(
     payload: UserProfileUpdate,
     current_user: TokenData = Depends(get_current_user),
@@ -153,6 +154,7 @@ async def get_staff_profile(
 
 
 @router.put("/staff-profiles/{user_id}", response_model=StandardResponse)
+@router.patch("/staff-profiles/{user_id}", response_model=StandardResponse)
 async def update_staff_profile(
     user_id: UUID,
     payload: StaffProfileUpdate,
@@ -250,7 +252,7 @@ async def list_chat_users(
         WHERE u.tenant_id = :tid
           AND u.id != :uid
           AND LOWER(u.role::text) IN ('teacher', 'admin', 'super_admin')
-          AND u.status = 'active'
+          AND LOWER(u.status::text) NOT IN ('suspended', 'inactive')
         ORDER BY u.first_name, u.last_name
     """), {"tid": tid, "uid": uid})).fetchall()
 
@@ -441,12 +443,13 @@ async def list_students(
             s.student_code,
             c.grade,
             c.name  AS class_name,
-            u.email
+            u.email,
+            u.id    AS user_id
         FROM students s
         LEFT JOIN classes  c ON c.id = s.class_id  AND c.tenant_id = :tid
         LEFT JOIN users    u ON u.id = s.user_id   AND u.tenant_id = :tid
         WHERE s.tenant_id = :tid
-          AND s.status = 'active'
+          AND LOWER(s.status::text) NOT IN ('graduated', 'transferred', 'suspended', 'inactive')
         ORDER BY s.first_name, s.last_name
     """), {"tid": tid})).fetchall()
 
@@ -460,6 +463,80 @@ async def list_students(
             "grade": str(r[4]) if r[4] is not None else None,
             "class_name": r[5],
             "email": r[6],
+            "user_id": str(r[7]) if r[7] else None,
         }
         for r in rows
     ])
+
+
+@router.get("/award-recipients", response_model=StandardResponse)
+async def list_award_recipients(
+    current_user: TokenData = Depends(require_roles("admin", "super_admin", "teacher")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return all possible award recipients in one call:
+    students (active) + all staff users.
+    Used by the awards modal so a single query populates the full picker.
+    """
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+
+    # ── Students ──────────────────────────────────────────────────────────────
+    student_rows = (await db.execute(text("""
+        SELECT
+            s.id            AS id,
+            s.first_name,
+            s.last_name,
+            s.student_code,
+            c.grade,
+            c.name          AS class_name,
+            u.id            AS user_id
+        FROM students s
+        LEFT JOIN classes c ON c.id = s.class_id AND c.tenant_id = :tid
+        LEFT JOIN users   u ON u.id = s.user_id  AND u.tenant_id = :tid
+        WHERE s.tenant_id = :tid
+          AND LOWER(s.status::text) NOT IN ('graduated', 'transferred', 'suspended', 'inactive')
+        ORDER BY s.first_name, s.last_name
+    """), {"tid": tid})).fetchall()
+
+    students = [
+        {
+            "id": str(r[0]),
+            "name": f"{r[1]} {r[2]}".strip(),
+            "student_code": r[3],
+            "grade": str(r[4]) if r[4] is not None else None,
+            "class_name": r[5],
+            "user_id": str(r[6]) if r[6] else None,
+            "type": "student",
+            "role": None,
+        }
+        for r in student_rows
+    ]
+
+    # ── Staff (teachers, admins — any status except suspended) ───────────────
+    staff_rows = (await db.execute(text("""
+        SELECT u.id, u.first_name, u.last_name, u.email, LOWER(u.role::text) AS role
+        FROM users u
+        WHERE u.tenant_id = :tid
+          AND LOWER(u.role::text) IN ('teacher', 'admin', 'super_admin')
+          AND LOWER(u.status::text) NOT IN ('suspended', 'inactive')
+        ORDER BY u.first_name, u.last_name
+    """), {"tid": tid})).fetchall()
+
+    staff = [
+        {
+            "id": str(r[0]),
+            "name": f"{r[1]} {r[2]}".strip(),
+            "email": r[3],
+            "role": r[4],
+            "user_id": str(r[0]),   # for staff, user_id == id
+            "student_code": None,
+            "grade": None,
+            "class_name": None,
+            "type": "staff",
+        }
+        for r in staff_rows
+    ]
+
+    return StandardResponse(success=True, data={"students": students, "staff": staff})

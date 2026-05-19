@@ -216,7 +216,7 @@ function StudentsGrid() {
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5">
                       {(['present','absent','late','excused'] as AttendanceStatus[]).map(s => {
-                        const active = (entries[student.id] ?? 'present') === s
+                        const active = entries[student.id] === s
                         return (
                           <button key={s}
                             onClick={() => setEntries(prev => ({ ...prev, [student.id]: s }))}
@@ -382,7 +382,7 @@ function PersonnelGrid({ type }: { type: 'teachers' | 'staff' }) {
                   <td className="px-4 py-3">
                     <div className="flex gap-1.5">
                       {(['present','absent','late','excused'] as AttendanceStatus[]).map(s => {
-                        const active = (entries[person.id] ?? 'present') === s
+                        const active = entries[person.id] === s
                         return (
                           <button key={s}
                             onClick={() => setEntries(prev => ({ ...prev, [person.id]: s }))}
