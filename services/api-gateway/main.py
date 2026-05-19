@@ -64,6 +64,7 @@ ROUTE_MAP = {
     "/api/v1/copilot":       "ai-copilot",
     "/api/v1/feed":          "student",
     "/api/v1/upload":        "student",
+    "/api/v1/settings":      "tenant",
 }
 
 # Endpoints that don't require authentication

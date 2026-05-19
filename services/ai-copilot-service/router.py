@@ -773,6 +773,44 @@ async def save_api_key(
     return StandardResponse.ok({"saved": True, "provider": body.provider})
 
 
+@router.get("/config/api-keys", response_model=StandardResponse[dict])
+async def get_saved_api_keys(
+    current_user=Depends(require_roles("admin")),
+):
+    """Return which providers have a key saved in Redis (without exposing the key value)."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    providers = ["openai", "anthropic", "google", "mistral", "groq", "cohere"]
+    result = {}
+    try:
+        r = await get_redis()
+        for p in providers:
+            val = await r.get(f"tenant:{tid}:ai_key:{p}")
+            if val:
+                # Return a masked hint, never the raw key
+                masked = val[:6] + "••••••••••••" + val[-4:] if len(val) > 10 else "••••••••••••"
+                result[p] = masked
+    except Exception:
+        pass
+    return StandardResponse.ok(result)
+
+
+@router.delete("/config/api-key/{provider}", response_model=StandardResponse[dict])
+async def delete_api_key(
+    provider: str,
+    current_user=Depends(require_roles("admin")),
+):
+    """Remove a saved API key from Redis for this tenant."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    try:
+        r = await get_redis()
+        await r.delete(f"tenant:{tid}:ai_key:{provider}")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Redis error: {exc}")
+    return StandardResponse.ok({"deleted": True, "provider": provider})
+
+
 @router.post("/chat", response_model=StandardResponse[ChatResponse])
 async def chat(
     body: ChatRequest,

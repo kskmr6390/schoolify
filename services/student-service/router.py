@@ -283,6 +283,28 @@ async def create_student(
     return StandardResponse.ok(StudentResponse.model_validate(student))
 
 
+@router.get("/students/me", response_model=StandardResponse[StudentResponse])
+async def get_my_student_profile(
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the student record for the currently logged-in student user."""
+    from uuid import UUID as UUIDT
+    tid = UUIDT(current_user.tenant_id)
+    uid = UUIDT(current_user.user_id)
+
+    result = await db.execute(
+        select(Student).where(
+            Student.user_id == uid,
+            Student.tenant_id == tid,
+        )
+    )
+    student = result.scalar_one_or_none()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+    return StandardResponse.ok(StudentResponse.model_validate(student))
+
+
 @router.get("/students/{student_id}", response_model=StandardResponse[StudentResponse])
 async def get_student(
     student_id: UUID,
@@ -300,6 +322,7 @@ async def get_student(
 
 
 @router.put("/students/{student_id}", response_model=StandardResponse[StudentResponse])
+@router.patch("/students/{student_id}", response_model=StandardResponse[StudentResponse])
 async def update_student(
     student_id: UUID,
     body: StudentUpdate,
@@ -315,10 +338,7 @@ async def update_student(
         raise HTTPException(status_code=404, detail="Student not found")
 
     for field, value in body.model_dump(exclude_none=True).items():
-        if isinstance(value, dict):
-            setattr(student, field, value)  # JSONB fields
-        else:
-            setattr(student, field, value)
+        setattr(student, field, value)
 
     return StandardResponse.ok(StudentResponse.model_validate(student))
 

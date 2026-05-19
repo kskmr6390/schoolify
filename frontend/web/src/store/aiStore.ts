@@ -1,5 +1,35 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
+
+// ─── Tenant-scoped localStorage ───────────────────────────────────────────────
+// Reads the tenant_id from the auth store's persisted JSON so each tenant's
+// AI config (especially API keys) is isolated in its own localStorage entry.
+function getCurrentTenantId(): string {
+  if (typeof window === 'undefined') return 'default'
+  try {
+    const raw = localStorage.getItem('schoolify-auth')
+    if (!raw) return 'default'
+    const parsed = JSON.parse(raw)
+    return parsed?.state?.tenant?.tenant_id ?? 'default'
+  } catch {
+    return 'default'
+  }
+}
+
+const tenantStorage = {
+  getItem: (name: string): string | null => {
+    if (typeof window === 'undefined') return null
+    return localStorage.getItem(`${name}__${getCurrentTenantId()}`)
+  },
+  setItem: (name: string, value: string): void => {
+    if (typeof window === 'undefined') return
+    localStorage.setItem(`${name}__${getCurrentTenantId()}`, value)
+  },
+  removeItem: (name: string): void => {
+    if (typeof window === 'undefined') return
+    localStorage.removeItem(`${name}__${getCurrentTenantId()}`)
+  },
+}
 
 // ─── Provider & Model Definitions ────────────────────────────────────────────
 
@@ -314,6 +344,9 @@ export const useAIStore = create<AIStore>()(
       indexData:  (chunks) => set({ ragChunks: chunks }),
       clearIndex: () => set({ ragChunks: [], localStatus: 'idle', localProgress: 0, localTrainedAt: null, localLogs: [] }),
     }),
-    { name: 'schoolify-ai-config' }
+    {
+      name: 'schoolify-ai-config',
+      storage: createJSONStorage(() => tenantStorage),
+    }
   )
 )

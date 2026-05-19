@@ -15,7 +15,7 @@ from services.auth_service.models import User, OAuthAccount, RefreshToken, Audit
 from services.tenant_service.models import Tenant, TenantSetting, FeatureFlag
 
 # User service models
-from services.user_service.models import UserProfile, StaffProfile
+from services.user_service.models import UserProfile, StaffProfile, ParentStudentLink
 
 # Student service models
 from services.student_service.models import (
@@ -37,6 +37,7 @@ from services.assignment_service.models import (
 # Notification service models
 from services.notification_service.models import (
     NotificationTemplate, Notification, NotificationPreference, DeviceToken,
+    ChatConversation, ChatMessage, Award,
 )
 
 # AI Copilot service models

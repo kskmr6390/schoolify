@@ -340,6 +340,10 @@ export default function ChatPage() {
     email: user?.email ?? '',
   }
 
+  const [sidebarTab,     setSidebarTab]     = useState<'chats' | 'people'>('chats')
+  const [staffUsers,     setStaffUsers]     = useState<ChatUser[]>([])
+  const [loadingStaff,   setLoadingStaff]   = useState(false)
+  const [staffSearch,    setStaffSearch]    = useState('')
   const [conversations,  setConversations]  = useState<Conversation[]>([])
   const [messages,       setMessages]       = useState<Message[]>([])
   const [activeId,       setActiveId]       = useState<string | null>(null)
@@ -391,6 +395,57 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => { loadConversations() }, [loadConversations])
+
+  // ── Load all staff/teachers for People tab ───────────────────────────────
+  useEffect(() => {
+    setLoadingStaff(true)
+    api.get('/api/v1/users/chat-users')
+      .then((res: any) => {
+        const data = res?.data ?? res
+        setStaffUsers((data ?? []).map((u: any) => ({
+          id:     u.id,
+          name:   u.name,
+          role:   u.role,
+          email:  u.email,
+          online: false,
+        })))
+      })
+      .catch(() => setStaffUsers([]))
+      .finally(() => setLoadingStaff(false))
+  }, [])
+
+  // ── Start or open a direct conversation with a staff member ─────────────
+  const openDirectWithUser = useCallback(async (person: ChatUser) => {
+    // Check if a direct conversation with this person already exists
+    const existing = conversations.find(
+      c => c.type === 'direct' && (c.name === person.name || c.participants.includes(person.id))
+    )
+    if (existing) {
+      openConvo(existing.id)
+      setSidebarTab('chats')
+      return
+    }
+    // Create a new direct conversation
+    try {
+      const res: any = await api.post('/api/v1/notifications/chat/conversations', {
+        type: 'direct',
+        participant_ids: [person.id],
+        name: null,
+      })
+      const data = res?.data ?? res
+      const convo: Conversation = {
+        id:           data.id,
+        type:         'direct',
+        name:         data.name ?? person.name,
+        participants: data.participants ?? [person.id],
+        updatedAt:    data.updated_at ?? new Date().toISOString(),
+        lastMessage:  null,
+      }
+      addConvo(convo)
+      setSidebarTab('chats')
+    } catch { /* silently ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations])
 
   // ── Load messages when active conversation changes ───────────────────────
   useEffect(() => {
@@ -570,63 +625,127 @@ export default function ChatPage() {
               <Plus size={15} className="text-white" />
             </button>
           </div>
-          <div className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              value={searchConvo} onChange={e => setSearchConvo(e.target.value)}
-              placeholder="Search conversations..."
-              className="w-full pl-8 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
+          {/* Tabs: Chats | People */}
+          <div className="flex gap-1 bg-gray-100 rounded-xl p-1 mb-3">
+            {(['chats', 'people'] as const).map(t => (
+              <button key={t} onClick={() => setSidebarTab(t)}
+                className={cn(
+                  'flex-1 py-1.5 rounded-lg text-xs font-medium transition capitalize',
+                  sidebarTab === t ? 'bg-white text-indigo-700 shadow-sm' : 'text-gray-500'
+                )}>
+                {t === 'chats' ? 'Chats' : 'People'}
+              </button>
+            ))}
           </div>
+          {sidebarTab === 'chats' ? (
+            <div className="relative">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={searchConvo} onChange={e => setSearchConvo(e.target.value)}
+                placeholder="Search conversations..."
+                className="w-full pl-8 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          ) : (
+            <div className="relative">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                value={staffSearch} onChange={e => setStaffSearch(e.target.value)}
+                placeholder="Search teachers & staff..."
+                className="w-full pl-8 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          )}
         </div>
 
-        <div className="flex-1 overflow-y-auto">
-          {loadingConvos ? (
-            <div className="flex items-center justify-center h-32">
-              <p className="text-sm text-gray-400">Loading...</p>
-            </div>
-          ) : filteredConvos.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center px-6">
-              <MessageCircle size={32} className="text-gray-300 mb-3" />
-              <p className="text-sm text-gray-500 font-medium">No conversations yet</p>
-              <button onClick={() => setShowNew(true)}
-                className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
-                Start a new chat
-              </button>
-            </div>
-          ) : filteredConvos.map(c => {
-            const last = c.lastMessage
-            const isActive = c.id === activeId
-            return (
-              <button key={c.id} onClick={() => openConvo(c.id)}
-                className={cn(
-                  'w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors border-b border-gray-50',
-                  isActive && 'bg-indigo-50 border-indigo-100'
-                )}>
-                {c.type === 'group' ? (
-                  <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                    <Users size={16} className="text-gray-500" />
-                  </div>
-                ) : (
-                  <Avatar name={c.name} />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-baseline">
-                    <p className={cn('text-sm font-semibold truncate', isActive ? 'text-indigo-700' : 'text-gray-900')}>
-                      {c.name}
-                    </p>
-                    {last && <span className="text-[10px] text-gray-400 flex-shrink-0 ml-1">{formatMsgTime(last.createdAt)}</span>}
-                  </div>
-                  {last && (
-                    <p className="text-xs text-gray-500 truncate">
-                      {last.senderId === currentUser.id ? 'You: ' : ''}{last.text}
-                    </p>
+        {/* ── Chats list ── */}
+        {sidebarTab === 'chats' && (
+          <div className="flex-1 overflow-y-auto">
+            {loadingConvos ? (
+              <div className="flex items-center justify-center h-32">
+                <p className="text-sm text-gray-400">Loading...</p>
+              </div>
+            ) : filteredConvos.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center px-6">
+                <MessageCircle size={32} className="text-gray-300 mb-3" />
+                <p className="text-sm text-gray-500 font-medium">No conversations yet</p>
+                <button onClick={() => setSidebarTab('people')}
+                  className="mt-3 text-xs text-indigo-600 hover:text-indigo-700 font-medium">
+                  Browse People to start chatting
+                </button>
+              </div>
+            ) : filteredConvos.map(c => {
+              const last = c.lastMessage
+              const isActive = c.id === activeId
+              return (
+                <button key={c.id} onClick={() => openConvo(c.id)}
+                  className={cn(
+                    'w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors border-b border-gray-50',
+                    isActive && 'bg-indigo-50 border-indigo-100'
+                  )}>
+                  {c.type === 'group' ? (
+                    <div className="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                      <Users size={16} className="text-gray-500" />
+                    </div>
+                  ) : (
+                    <Avatar name={c.name} />
                   )}
-                </div>
-              </button>
-            )
-          })}
-        </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-baseline">
+                      <p className={cn('text-sm font-semibold truncate', isActive ? 'text-indigo-700' : 'text-gray-900')}>
+                        {c.name}
+                      </p>
+                      {last && <span className="text-[10px] text-gray-400 flex-shrink-0 ml-1">{formatMsgTime(last.createdAt)}</span>}
+                    </div>
+                    {last && (
+                      <p className="text-xs text-gray-500 truncate">
+                        {last.senderId === currentUser.id ? 'You: ' : ''}{last.text}
+                      </p>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* ── People list ── */}
+        {sidebarTab === 'people' && (
+          <div className="flex-1 overflow-y-auto">
+            {loadingStaff ? (
+              <div className="flex items-center justify-center h-32">
+                <p className="text-sm text-gray-400">Loading staff...</p>
+              </div>
+            ) : staffUsers.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center px-6">
+                <UserCircle2 size={32} className="text-gray-300 mb-3" />
+                <p className="text-sm text-gray-500">No staff members found</p>
+              </div>
+            ) : (
+              <>
+                <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                  {staffUsers.length} people — click to chat
+                </p>
+                {staffUsers
+                  .filter(u => u.name.toLowerCase().includes(staffSearch.toLowerCase()) || u.role.toLowerCase().includes(staffSearch.toLowerCase()))
+                  .map(person => (
+                    <button
+                      key={person.id}
+                      onClick={() => openDirectWithUser(person)}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors border-b border-gray-50"
+                    >
+                      <Avatar name={person.name} size="md" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{person.name}</p>
+                        <p className="text-xs text-gray-400 capitalize">{person.role.replace('_', ' ')}</p>
+                      </div>
+                      <MessageCircle size={14} className="text-gray-300 flex-shrink-0" />
+                    </button>
+                  ))}
+              </>
+            )}
+          </div>
+        )}
       </aside>
 
       {/* ── Chat Panel ───────────────────────────────────────────────────── */}

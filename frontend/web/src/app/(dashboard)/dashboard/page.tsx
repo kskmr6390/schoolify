@@ -2,6 +2,9 @@
 
 import { useAuthStore } from '../../../store/authStore'
 import { AdminDashboard } from '../../../components/dashboard/AdminDashboard'
+import { TeacherDashboard } from '../../../components/dashboard/TeacherDashboard'
+import { StudentDashboard } from '../../../components/dashboard/StudentDashboard'
+import { ParentDashboard } from '../../../components/dashboard/ParentDashboard'
 
 export default function DashboardPage() {
   const { user } = useAuthStore()
@@ -14,28 +17,29 @@ export default function DashboardPage() {
     parent: 'Parent Dashboard',
   }
 
+  const subtitle: Record<string, string> = {
+    admin: "Here's your school overview for today.",
+    super_admin: "Platform-wide analytics and overview.",
+    teacher: "Your classes, students, and today's schedule.",
+    student: "Your attendance, assignments, and updates.",
+    parent: "Stay updated on your child's progress.",
+  }
+
   return (
-    <div>
-      <div className="mb-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div>
         <h1 className="text-2xl font-bold text-gray-900">
           {title[user?.role || 'student']}
         </h1>
         <p className="text-sm text-gray-500 mt-1">
-          Welcome back, {user?.first_name}! Here's what's happening today.
+          Welcome back, {user?.first_name}! {subtitle[user?.role || 'student']}
         </p>
       </div>
 
-      {/* Render role-specific dashboard */}
       {(user?.role === 'admin' || user?.role === 'super_admin') && <AdminDashboard />}
-      {user?.role === 'teacher' && (
-        <div className="text-gray-500">Teacher dashboard coming soon...</div>
-      )}
-      {user?.role === 'student' && (
-        <div className="text-gray-500">Student dashboard coming soon...</div>
-      )}
-      {user?.role === 'parent' && (
-        <div className="text-gray-500">Parent dashboard coming soon...</div>
-      )}
+      {user?.role === 'teacher' && <TeacherDashboard />}
+      {user?.role === 'student' && <StudentDashboard />}
+      {user?.role === 'parent' && <ParentDashboard />}
     </div>
   )
 }
